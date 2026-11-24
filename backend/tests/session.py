@@ -99,6 +99,20 @@ def main(executable):
                 ("text", "Progress 50%"), ("column", 0), ("clear_right", None),
                 ("text", "Progress 100%"), ("column", 0), ("text", "\n"),
             ], progress
+            # APT draws on the last screen row while dpkg continues writing above it.
+            first.send(b"printf '\\n\\0337\\033[0;39r\\0338\\033[1AUnpacking '; "
+                       b"printf '\\0337\\033[4'; sleep 0.1; "
+                       b"printf '0;0f\\033[42m\\033[30mProgress: [ 33%%]\\033[49m\\033[39m [\\342\\226\\210 ]\\0338'; "
+                       b"sleep 0.15; printf 'test package\\nSetting up '; "
+                       b"printf '\\0337\\033[40;0f\\033[42m\\033[30mProgress: [ 67%%]\\033[49m\\033[39m [\\342\\226\\210\\342\\226\\210]\\0338'; "
+                       b"sleep 0.15; printf 'test package\\n\\n\\0337\\033[0;40r\\0338\\033[1A\\033JDone\\n'\r")
+            events = first.until("prompt")
+            transcript = "".join(e["text"] for e in events if e["type"] == "output")
+            assert transcript == "\nUnpacking test package\nSetting up test package\n\nDone\n", transcript
+            assert [e["text"] for e in events if e["type"] == "status_line"] == [
+                "Progress: [ 33%] [█ ]", "Progress: [ 67%] [██]", None,
+            ], events
+            assert [e["code"] for e in events if e["type"] == "finished"] == [0], events
             first.send(b"sleep 30\r")
             first.until("started")
             time.sleep(0.15)

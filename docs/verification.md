@@ -1,8 +1,18 @@
 # Mobile Terminal 验证记录
 
+## 0.2.6 APT 安装进度
+
+0.2.5 将 APT 保留在屏幕底行的安装进度写入了命令块，导致进度和软件包日志挤在同一行。旧后端使用分片回放稳定复现。修复后的两项 Rust 单元测试及 Bash PTY 回归通过。分片回放覆盖光标保存、底行定位、两次重绘和清除，并检查解包、配置日志各自完整。
+
+WSL2 使用隔离的 dpkg 根目录运行实际的 APT 安装。记录到四次独立状态更新，完成后清除。测试包安装成功，解包和配置日志留在命令块中，安装进度留在临时状态行。[APT 3.0.3 状态行源码](https://github.com/Debian/apt/blob/3.0.3/apt-pkg/install-progress.cc#L259-L315)
+
+2026 年 11 月 24 日在荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）通过 USB ADB 覆盖安装。APK v2 签名和 SHA-256 校验通过，设备安装包哈希为 `ca8262c5e25a28091a392b0d5bbdb4f21b9c7c22387f98435271c002b4b36894`，与本地一致。五项 Android JVM 测试和五项设备自动测试通过。[0.2.6 SHA-256 文件](../build/mobile-terminal-arm64-debug.apk.sha256) · [设备测试日志](../build/apt-progress-device-test.txt)
+
+在真机命令块中以隔离的 dpkg 根目录安装临时测试包。安装期间只显示一条独立进度状态，捕获了 40% 的进度条。完成后状态行收起，解包和配置日志各自完整，命令退出码为 `0`，Bash 恢复可输入。
+
 ## 0.2.5 终端应用标签
 
-2026 年 11 月 24 日通过 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）覆盖安装。APK v2 签名及 SHA-256 校验通过，设备安装包哈希与本地相同，为 `9439628e786c35fb60f04c85de578adddee4fd7295d6e3310e0ced1767c8dd73`。五项 Android JVM 测试和五项设备测试通过。新增设备用例检查终端画布只修改标签的绘制范围。[0.2.5 SHA-256 文件](../build/mobile-terminal-arm64-debug.apk.sha256) · [设备测试日志](../build/tui-device-test.txt)
+2026 年 11 月 24 日通过 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）覆盖安装。APK v2 签名及 SHA-256 校验通过，设备安装包哈希与本地相同，为 `9439628e786c35fb60f04c85de578adddee4fd7295d6e3310e0ced1767c8dd73`。五项 Android JVM 测试和五项设备测试通过。新增设备用例检查终端画布只修改标签的绘制范围。[0.2.5 SHA-256 文件](https://github.com/northws/Mobile-Terminal/releases/download/v0.2.5/mobile-terminal-arm64-debug.apk.sha256) · [设备测试日志](../build/tui-device-test.txt)
 
 - OpenCode 2.4.1 全屏界面的「＋ 新标签」、标签栏、「键盘」和「关闭标签」可见。用「键盘」输入测试文字，切换至 Bash 后可继续切回 OpenCode，退出状态为 `0`。
 - 从菜单直接打开 Vim 并退出。再从 Bash 用 Vim 打开临时文件，确认独立应用标签自动出现。切换至 Bash、暂时关闭并重新打开 Vim 标签后，仍能保存之前输入的文字，并从原 Bash 读回相同文本。

@@ -12,11 +12,31 @@ use warpui_core::color::ColorU;
 
 use crate::protocol;
 
+#[derive(Default)]
+struct StatusLine {
+    row: Option<usize>,
+    writing: bool,
+    saved_cursor: bool,
+    text: String,
+    published: String,
+}
+
+impl StatusLine {
+    fn reset(&mut self) {
+        self.row = None;
+        self.writing = false;
+        self.saved_cursor = false;
+        self.text.clear();
+    }
+}
+
 pub struct Terminal {
     session: SessionId,
+    rows: usize,
     active: bool,
     alternate: bool,
     text: String,
+    status: StatusLine,
     prompt_directory: Option<String>,
     foreground: Option<u32>,
     bold: bool,
@@ -24,11 +44,16 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    pub fn new(session: SessionId) -> Self {
+    pub fn new(session: SessionId, rows: u16) -> Self {
         Self {
-            session, active: false, alternate: false, text: String::new(), prompt_directory: None,
+            session, rows: usize::from(rows), active: false, alternate: false, text: String::new(),
+            status: StatusLine::default(), prompt_directory: None,
             foreground: None, bold: false, events: Vec::new(),
         }
+    }
+
+    pub fn resize(&mut self, rows: u16) {
+        self.rows = usize::from(rows);
     }
 
     fn flush_text(&mut self) {
@@ -41,7 +66,7 @@ impl Terminal {
     }
 
     fn line_edit(&mut self, operation: &str, column: Option<usize>) {
-        if self.active && !self.alternate {
+        if self.active && !self.alternate && !self.status.writing {
             self.flush_text();
             self.events.push(json!({"type":"line_edit", "operation":operation, "column":column}));
         }
@@ -49,6 +74,7 @@ impl Terminal {
 
     fn finish(&mut self, code: i32) {
         self.flush_text();
+        self.status.reset();
         if self.active {
             self.events.push(json!({"type":"finished", "code":code}));
             self.active = false;
@@ -63,6 +89,12 @@ impl Terminal {
 
     pub fn send_events(&mut self, writer: &mut impl Write) -> io::Result<()> {
         self.flush_text();
+        let status = self.status.text.trim_end();
+        if status != self.status.published {
+            self.status.published = status.to_owned();
+            let text = (!status.is_empty()).then_some(status);
+            self.events.push(json!({"type":"status_line", "text":text}));
+        }
         for event in self.events.drain(..) {
             protocol::event(writer, event)?;
         }
@@ -77,6 +109,7 @@ impl Handler for Terminal {
 
     fn preexec(&mut self, data: PreexecValue) {
         self.flush_text();
+        self.status.reset();
         self.active = true;
         self.events.push(json!({"type":"started", "command":data.command}));
     }
@@ -104,7 +137,13 @@ impl Handler for Terminal {
 
     fn input(&mut self, character: char) {
         if self.active && !self.alternate {
-            self.text.push(character);
+            if self.status.writing {
+                if self.status.text.len() < 4096 {
+                    self.status.text.push(character);
+                }
+            } else {
+                self.text.push(character);
+            }
         }
     }
 
@@ -117,7 +156,9 @@ impl Handler for Terminal {
     }
 
     fn linefeed(&mut self) -> ScrollDelta {
-        self.input('\n');
+        if !self.status.writing {
+            self.input('\n');
+        }
         ScrollDelta::zero()
     }
 
@@ -128,6 +169,7 @@ impl Handler for Terminal {
     fn set_mode(&mut self, mode: Mode) {
         if matches!(mode, Mode::SwapScreen { .. }) && !self.alternate {
             self.flush_text();
+            self.status.reset();
             self.alternate = true;
             self.events.push(json!({"type":"screen", "alternate":true}));
         }
@@ -163,11 +205,16 @@ impl Handler for Terminal {
         }
     }
 
-    // The Android VT renderer handles full-screen cursor operations and device replies.
+    // The Android VT renderer handles general cursor operations and device replies.
     fn set_title(&mut self, _: Option<String>) {}
     fn set_cursor_style(&mut self, _: Option<CursorStyle>) {}
     fn set_cursor_shape(&mut self, _shape: CursorShape) {}
-    fn goto(&mut self, _: VisibleRow, _: usize) {}
+    fn goto(&mut self, row: VisibleRow, column: usize) {
+        self.status.writing = self.status.row == Some(row.0);
+        if self.status.writing && column == 0 {
+            self.status.text.clear();
+        }
+    }
     fn goto_line(&mut self, _: VisibleRow) {}
     fn goto_col(&mut self, column: usize) { self.line_edit("column", Some(column)); }
     fn insert_blank(&mut self, _: usize) {}
@@ -192,8 +239,8 @@ impl Handler for Terminal {
     fn delete_chars(&mut self, _: usize) {}
     fn move_backward_tabs(&mut self, _count: u16) {}
     fn move_forward_tabs(&mut self, _count: u16) {}
-    fn save_cursor_position(&mut self) {}
-    fn restore_cursor_position(&mut self) {}
+    fn save_cursor_position(&mut self) { self.status.saved_cursor = self.status.writing; }
+    fn restore_cursor_position(&mut self) { self.status.writing = self.status.saved_cursor; }
     fn clear_line(&mut self, mode: LineClearMode) {
         let operation = match mode {
             LineClearMode::Right => "clear_right",
@@ -214,7 +261,18 @@ impl Handler for Terminal {
     fn push_keyboard_enhancement_flags(&mut self, _mode: KeyboardModes) {}
     fn pop_keyboard_enhancement_flags(&mut self, _count: u16) {}
     fn query_keyboard_enhancement_flags<W: io::Write>(&mut self, _writer: &mut W) {}
-    fn set_scrolling_region(&mut self, _top: usize, _bottom: Option<usize>) {}
+    fn set_scrolling_region(&mut self, top: usize, bottom: Option<usize>) {
+        if self.active && !self.alternate {
+            // APT reserves exactly the last row. Warp gives the bottom margin as a
+            // one-based row number, which is also the next row's zero-based index.
+            let row = bottom.filter(|&row| top == 1 && row == self.rows - 1);
+            if self.status.row != row {
+                self.status.text.clear();
+            }
+            self.status.row = row;
+            self.status.writing = false;
+        }
+    }
     fn set_keypad_application_mode(&mut self) {}
     fn unset_keypad_application_mode(&mut self) {}
     fn set_active_charset(&mut self, _: CharsetIndex) {}

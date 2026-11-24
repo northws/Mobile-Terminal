@@ -293,6 +293,8 @@ internal class TerminalTab(
     val blocks = mutableStateListOf<CommandBlock>()
     var draft by mutableStateOf("")
     var replyDraft by mutableStateOf("")
+    var statusLine by mutableStateOf<String?>(null)
+        private set
     val running get() = !ready && !closing && !exited && blocks.lastOrNull()?.let { it.code == null } == true
     var directory by mutableStateOf("/home/warp")
         private set
@@ -378,6 +380,7 @@ internal class TerminalTab(
                 exited = true
                 ready = false
                 replyDraft = ""
+                statusLine = null
                 alternate = false
                 showingStartupApp = false
                 onTerminalAppChanged(this@TerminalTab, false)
@@ -397,6 +400,7 @@ internal class TerminalTab(
             "started" -> {
                 ready = false
                 replyDraft = ""
+                statusLine = null
                 if (blocks.size >= 100) blocks.removeAt(0)
                 blocks.add(CommandBlock(nextBlock++, pendingCommand ?: value.getString("command")))
                 pendingCommand = null
@@ -408,9 +412,11 @@ internal class TerminalTab(
             "line_edit" -> blocks.lastOrNull()?.takeIf { it.code == null }?.editLine(
                 value.getString("operation"), value.optInt("column"),
             )
+            "status_line" -> statusLine = if (value.isNull("text")) null else value.getString("text")
             "finished" -> {
                 blocks.lastOrNull()?.takeIf { it.code == null }?.code = value.getInt("code")
                 replyDraft = ""
+                statusLine = null
                 onTerminalAppChanged(this, false)
             }
             "prompt" -> {

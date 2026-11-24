@@ -476,19 +476,24 @@ private fun SessionPanel(
             }
             val context = LocalContext.current
             val measure = remember(context) { TerminalGrid.renderer(context) }
-            LazyColumn(
-                Modifier.weight(1f).fillMaxWidth().nestedScroll(manualScroll).onSizeChanged { size ->
-                    outputHeight = size.height
+            Column(
+                Modifier.weight(1f).fillMaxWidth().onSizeChanged { size ->
                     if (!appActive) TerminalGrid.resize(tab, measure, size.width, size.height)
                 },
-                state = state, contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (tab.blocks.isEmpty()) item {
-                    Text(if (tab.ready) "输入第一条 Bash 命令" else if (tab.exited) "会话已结束" else "正在启动 Bash",
-                        Modifier.padding(8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ) {
+                LazyColumn(
+                    Modifier.weight(1f).fillMaxWidth().nestedScroll(manualScroll).onSizeChanged { outputHeight = it.height },
+                    state = state, contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (tab.blocks.isEmpty()) item {
+                        Text(if (tab.ready) "输入第一条 Bash 命令" else if (tab.exited) "会话已结束" else "正在启动 Bash",
+                            Modifier.padding(8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    items(tab.blocks, key = { it.id }) { block -> BlockCard(block) }
+                    if (tab.blocks.isNotEmpty()) item(key = "output-tail") { Spacer(Modifier.height(1.dp)) }
                 }
-                items(tab.blocks, key = { it.id }) { block -> BlockCard(block) }
-                if (tab.blocks.isNotEmpty()) item(key = "output-tail") { Spacer(Modifier.height(1.dp)) }
+                tab.statusLine?.let { CommandStatus(it) }
             }
             if (!tab.exited && !appActive) {
                 val running = tab.running
@@ -532,6 +537,28 @@ private fun SessionPanel(
                     }
                 }
             }
+        }
+    }
+}
+
+private val progressStatus = Regex("""(.+\[\s*([0-9]{1,3})%\])(?:\s+\[[ .#\u2580-\u259f]*\])?""")
+
+@Composable
+private fun CommandStatus(status: String) {
+    val progress = remember(status) { progressStatus.matchEntire(status) }
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(progress?.groupValues?.get(1) ?: status,
+            if (progress == null) Modifier.weight(1f) else Modifier.widthIn(max = 180.dp),
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (progress != null) {
+            val fraction = progress.groupValues[2].toInt().coerceIn(0, 100) / 100f
+            LinearProgressIndicator(progress = { fraction }, modifier = Modifier.weight(1f))
         }
     }
 }

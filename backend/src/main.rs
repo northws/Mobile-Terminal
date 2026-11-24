@@ -33,6 +33,7 @@ fn main() {
 }
 
 fn run() -> io::Result<()> {
+    const INITIAL_ROWS: u16 = 24;
     // The standalone backend keeps Warp's optional terminal features at their defaults.
     warp_core::features::mark_initialized();
     let mut random = [0; 8];
@@ -40,12 +41,12 @@ fn run() -> io::Result<()> {
     let session = SessionId::from((u64::from_ne_bytes(random) >> 12) + 1);
     let home = env::var_os("HOME").map(PathBuf::from)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is missing"))?;
-    let mut terminal = Terminal::new(session);
+    let mut terminal = Terminal::new(session, INITIAL_ROWS);
     let mut parser = Processor::new();
     let mut input = pty::duplicate(libc::STDIN_FILENO)?;
     let mut output = io::BufWriter::new(io::stdout().lock());
     protocol::hello(&mut output)?;
-    let mut pty = Pty::spawn(&home, session, 80, 24)?;
+    let mut pty = Pty::spawn(&home, session, 80, INITIAL_ROWS)?;
     let status = relay(&mut input, &mut output, &mut pty, &mut parser, &mut terminal);
     if status.is_err() {
         pty.hangup();
@@ -99,7 +100,9 @@ fn relay(
                 }
                 Some((protocol::JSON, bytes)) => match serde_json::from_slice(&bytes)? {
                     Request::Resize { columns, rows } => {
-                        pty.resize(columns.clamp(4, 500), rows.clamp(4, 250))?;
+                        let rows = rows.clamp(4, 250);
+                        pty.resize(columns.clamp(4, 500), rows)?;
+                        terminal.resize(rows);
                         false
                     }
                     Request::Close => true,
