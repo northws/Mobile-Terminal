@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,6 +30,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -38,6 +41,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -119,6 +123,7 @@ private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) ->
     val window = graphics.tabs.firstOrNull { it.id == service.selected }
     var menu by remember { mutableStateOf(false) }
     var showApps by rememberSaveable { mutableStateOf(false) }
+    var confirmChromium by remember { mutableStateOf<LinuxApp?>(null) }
     val keyboard = LocalSoftwareKeyboardController.current
     fun bash() = start(TerminalService.ADD_TAB, null)
     Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
@@ -186,7 +191,25 @@ private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) ->
     if (showApps && service.installation == Installation.Ready) {
         GraphicsPicker(graphics, close = { showApps = false },
             install = { start(TerminalService.INSTALL_GRAPHICS, null) },
-            open = { app -> showApps = false; keyboard?.hide(); start(TerminalService.ADD_GRAPHICS, app) })
+            open = { app ->
+                showApps = false
+                keyboard?.hide()
+                if (app.isDebianChromium) confirmChromium = app else start(TerminalService.ADD_GRAPHICS, app)
+            })
+    }
+    confirmChromium?.let { app ->
+        AlertDialog(
+            onDismissRequest = { confirmChromium = null },
+            title = { Text("以兼容模式启动 Chromium？") },
+            text = { Text("此 Linux 环境无法启用 Chromium 的沙箱。兼容模式会关闭 Chromium 沙箱，使用独立的浏览器配置。请只打开可信页面。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmChromium = null
+                    start(TerminalService.ADD_COMPATIBLE_CHROMIUM, app)
+                }) { Text("兼容启动") }
+            },
+            dismissButton = { TextButton(onClick = { confirmChromium = null }) { Text("取消") } },
+        )
     }
 }
 
@@ -323,18 +346,42 @@ private fun SessionPanel(tab: TerminalTab, modifier: Modifier, close: () -> Unit
                 items(tab.blocks, key = { it.id }) { block -> BlockCard(block) }
             }
             if (!tab.exited) {
+                val running = tab.running
                 Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(tab.draft, { if (it.length <= 16_384) tab.draft = it },
-                        Modifier.weight(1f), label = { Text("Bash 命令") }, maxLines = 5,
-                        enabled = tab.ready, textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace))
-                    if (tab.ready) {
-                        Button(onClick = tab::submit, enabled = tab.draft.isNotBlank()) { Text("运行") }
-                    } else {
+                    OutlinedTextField(
+                        value = if (running) tab.replyDraft else tab.draft,
+                        onValueChange = {
+                            if (it.length <= 16_384) {
+                                if (running) tab.replyDraft = it else if (tab.ready) tab.draft = it
+                            }
+                        },
+                        modifier = Modifier.weight(1f).onPreviewKeyEvent { event ->
+                            val key = event.nativeKeyEvent
+                            if (tab.running && (key.keyCode == KeyEvent.KEYCODE_ENTER ||
+                                    key.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
+                            ) {
+                                if (key.action == KeyEvent.ACTION_DOWN && key.repeatCount == 0) tab.sendReply()
+                                true
+                            } else false
+                        },
+                        label = { Text(if (running) "进程输入" else "Bash 命令") },
+                        singleLine = running,
+                        maxLines = if (running) 1 else 5,
+                        enabled = tab.ready || running,
+                        keyboardOptions = if (running) KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Send)
+                            else KeyboardOptions.Default,
+                        keyboardActions = KeyboardActions(onSend = { tab.sendReply() }),
+                        textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
+                    )
+                    if (running) {
+                        Button(onClick = tab::sendReply) { Text("发送") }
                         FilledTonalButton(onClick = { tab.input(byteArrayOf(3)) },
-                            enabled = tab.blocks.lastOrNull()?.code == null && tab.blocks.isNotEmpty()) {
+                            enabled = tab.running) {
                             Text("Ctrl+C")
                         }
+                    } else {
+                        Button(onClick = tab::submit, enabled = tab.ready && tab.draft.isNotBlank()) { Text("运行") }
                     }
                 }
             }

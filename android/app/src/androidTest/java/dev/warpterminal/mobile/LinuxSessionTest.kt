@@ -6,7 +6,16 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -15,6 +24,52 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class LinuxSessionTest {
+    @Test fun runningBlockAcceptsMultipleRepliesAndAnEmptyEnter() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val linux = LinuxEnvironment(context)
+        linux.install { _, _ -> }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val ended = CompletableDeferred<Unit>()
+        val tab = withContext(Dispatchers.Main) { TerminalTab(1, linux, scope) { ended.complete(Unit) }.also { it.start() } }
+
+        suspend fun await(condition: () -> Boolean) = withTimeout(15_000) {
+            withContext(Dispatchers.Main) { while (!condition()) delay(25) }
+        }
+
+        fun output() = tab.blocks.lastOrNull()?.lines.orEmpty().joinToString("") { it.text }
+
+        try {
+            await { tab.ready }
+            withContext(Dispatchers.Main) {
+                tab.draft = "read -r -p 'Continue? [Y/n] ' answer; read -r -p 'Use default? [Y/n] ' choice; " +
+                    "printf 'RESULT=<%s,%s>\\n' \"\$answer\" \"\${choice:-default}\""
+                tab.submit()
+            }
+            await { tab.running && output().contains("Continue? [Y/n]") }
+            withContext(Dispatchers.Main) {
+                tab.replyDraft = "n"
+                tab.sendReply()
+            }
+            await { tab.running && output().contains("Use default? [Y/n]") }
+            withContext(Dispatchers.Main) {
+                assertEquals("", tab.replyDraft)
+                tab.sendReply()
+            }
+            await { tab.ready }
+            withContext(Dispatchers.Main) {
+                assertEquals(1, tab.blocks.size)
+                assertEquals(0, tab.blocks.single().code)
+                assertTrue(output().contains("RESULT=<n,default>"))
+            }
+        } finally {
+            withContext(Dispatchers.Main) { tab.close() }
+            if (withTimeoutOrNull(3_000) { ended.await() } == null) {
+                withContext(Dispatchers.Main) { tab.terminate() }
+            }
+            scope.cancel()
+        }
+    }
+
     @Test fun debianAndIndependentBashSessions() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val linux = LinuxEnvironment(context)

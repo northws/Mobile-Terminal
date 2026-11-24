@@ -24,7 +24,9 @@ import kotlinx.coroutines.withContext
 import me.phie.tawc.compositor.NativeBridge
 import org.json.JSONArray
 
-internal data class LinuxApp(val id: String, val name: String, val desktopFile: String?)
+internal data class LinuxApp(val id: String, val name: String, val desktopFile: String?) {
+    val isDebianChromium get() = desktopFile == "/usr/share/applications/chromium.desktop"
+}
 
 internal class GraphicsTab(val id: Int, val windowId: String, name: String, waiting: Boolean) {
     var title by mutableStateOf(name)
@@ -153,7 +155,7 @@ internal class GraphicsSessions(
         }
     }
 
-    fun launchApp(app: LinuxApp) {
+    fun launchApp(app: LinuxApp, chromiumCompatibility: Boolean) {
         // One reservation per desktop id avoids ambiguous app_id matching for single-instance apps.
         tabs.firstOrNull { it.pending && it.title == app.name }?.let { selected(it.id); return }
         val tab = GraphicsTab(newId(), UUID.randomUUID().toString(), app.name, true)
@@ -172,7 +174,7 @@ internal class GraphicsSessions(
                     if (tab.pending) failed(tab, "未收到图形窗口，请检查应用是否已安装及其显示支持。")
                 }
                 val result = withContext(Dispatchers.IO) {
-                    val process = linux.launchGraphics(app, token)
+                    val process = linux.launchGraphics(app, token, chromiumCompatibility)
                     try {
                         runInterruptible { process.waitFor() }
                     } finally {

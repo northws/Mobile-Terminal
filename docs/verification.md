@@ -1,8 +1,18 @@
 # Mobile Terminal 验证记录
 
+## 0.2.2 交互输入与 Chromium
+
+ARM64 APK 已通过 APK v2 签名和 SHA-256 校验，设备安装包哈希与本地一致，为 `04a52627aa91a4d96df7004577b46e0936a00eec677b84e17fb367410e1b8f47`。WSL2 的两项 Rust 单元测试、真实 Bash PTY 回归及三项 Android JVM 测试通过。[SHA-256 文件](../build/mobile-terminal-arm64-debug.apk.sha256)
+
+荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）在 0.2.1 复现了两个问题。APT 类确认能显示在命令块，输入框却不可编辑。Chromium 拒绝以 tawcroot 的虚拟 root 身份启动，普通用户切换和创建用户命名空间也返回权限错误。修复版把「进程输入」送给当前 PTY。Chromium 可经图形应用列表明确选择兼容模式，该模式关闭 Chromium 自身的沙箱，使用独立配置和 Wayland 软件渲染。
+
+- 通过 USB ADB 在 0.2.2 实测 APT 的 `[Y/n]` 提示。输入 `n` 后 APT 显示 `Abort.`，Bash 恢复可输入状态。向测试提示发送空白回车时，程序得到了默认值。
+- 从图形应用列表选择 Chromium 时，取消兼容启动会返回 Bash。再次选择并确认后，Chromium 在图形标签中以 Wayland 渲染 `about:blank`，地址栏、工具栏和页面均可见。
+- 4 项设备测试通过，其中新增用例在同一个 Bash 命令块先回复 `n`，再发送空行并取得默认值。测试期间发现并修复关闭会话时错误流读管道的崩溃。[设备测试日志](../build/interaction-device-test.txt)
+
 ## 0.2.1 名称更新
 
-已检查 ARM64 APK 的显示名为 Mobile Terminal，Android 应用 ID 和签名证书与 0.2.0 一致，可覆盖安装并保留已有 Debian 数据。APK v2 签名、SHA-256 和 3 项 Android JVM 测试通过。[SHA-256 文件](../build/mobile-terminal-arm64-debug.apk.sha256)
+已检查 ARM64 APK 的显示名为 Mobile Terminal，Android 应用 ID 和签名证书与 0.2.0 一致，可覆盖安装并保留已有 Debian 数据。APK v2 签名、SHA-256 和 3 项 Android JVM 测试通过。[0.2.1 SHA-256 文件](https://github.com/northws/Mobile-Terminal/releases/download/v0.2.1/mobile-terminal-arm64-debug.apk.sha256)
 
 ## 0.2.0 图形标签
 

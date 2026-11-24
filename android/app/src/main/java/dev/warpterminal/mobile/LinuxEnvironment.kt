@@ -124,14 +124,25 @@ internal class LinuxEnvironment(private val context: Context) {
         )
     }
 
-    fun launchGraphics(app: LinuxApp, token: String): Process {
-        val command = if (app.desktopFile != null) {
-            if (!File(rootfs, "usr/bin/gio").canExecute()) {
-                throw IOException("需要 Debian 软件包 libglib2.0-bin，可通过「安装示例应用」补齐。")
+    fun launchGraphics(app: LinuxApp, token: String, chromiumCompatibility: Boolean): Process {
+        val command = when {
+            chromiumCompatibility -> {
+                check(app.isDebianChromium)
+                if (!File(rootfs, "usr/bin/chromium").canExecute()) throw IOException("Debian 中尚未安装 Chromium")
+                arrayOf(
+                    "/usr/bin/chromium", "--no-sandbox", "--ozone-platform=wayland", "--disable-gpu",
+                    "--no-first-run", "--no-default-browser-check",
+                    "--user-data-dir=/home/warp/.local/share/mobile-terminal/chromium",
+                    "about:blank",
+                )
             }
-            arrayOf("/usr/bin/gio", "launch", app.desktopFile)
-        } else {
-            arrayOf("/usr/bin/xeyes")
+            app.desktopFile != null -> {
+                if (!File(rootfs, "usr/bin/gio").canExecute()) {
+                    throw IOException("需要 Debian 软件包 libglib2.0-bin，可通过「安装示例应用」补齐。")
+                }
+                arrayOf("/usr/bin/gio", "launch", app.desktopFile)
+            }
+            else -> arrayOf("/usr/bin/xeyes")
         }
         return guest(rootfs, "/bin/bash", "-c", "cd \"\$HOME\" && exec \"\$@\"", "warp-launch",
             *command, graphics = true, activation = token)

@@ -104,10 +104,13 @@ class TerminalService : Service() {
             INSTALL -> install()
             ADD_TAB -> addTab()
             INSTALL_GRAPHICS -> if (installation == Installation.Ready) graphics.installExamples()
-            ADD_GRAPHICS -> if (installation == Installation.Ready) {
+            ADD_GRAPHICS, ADD_COMPATIBLE_CHROMIUM -> if (installation == Installation.Ready) {
                 val id = intent.getStringExtra(APP_ID)
                 val name = intent.getStringExtra(APP_NAME)
-                if (id != null && name != null) graphics.launchApp(LinuxApp(id, name, intent.getStringExtra(APP_FILE)))
+                if (id != null && name != null) {
+                    val app = LinuxApp(id, name, intent.getStringExtra(APP_FILE))
+                    graphics.launchApp(app, chromiumCompatibility = intent.action == ADD_COMPATIBLE_CHROMIUM)
+                }
             }
         }
         finishIfIdle()
@@ -236,6 +239,7 @@ class TerminalService : Service() {
         internal const val ADD_TAB = "add_tab"
         internal const val INSTALL_GRAPHICS = "install_graphics"
         internal const val ADD_GRAPHICS = "add_graphics"
+        internal const val ADD_COMPATIBLE_CHROMIUM = "add_compatible_chromium"
         internal const val APP_ID = "app_id"
         internal const val APP_NAME = "app_name"
         internal const val APP_FILE = "app_file"
@@ -259,6 +263,8 @@ internal class TerminalTab(
     private var control = false
     val blocks = mutableStateListOf<CommandBlock>()
     var draft by mutableStateOf("")
+    var replyDraft by mutableStateOf("")
+    val running get() = !ready && !closing && !exited && blocks.lastOrNull()?.let { it.code == null } == true
     var directory by mutableStateOf("/home/warp")
         private set
     var ready by mutableStateOf(false)
@@ -300,9 +306,13 @@ internal class TerminalTab(
                     }
                 }
                 launch(Dispatchers.IO) {
-                    running.errorStream.use { source ->
-                        val buffer = ByteArray(4096)
-                        while (source.read(buffer) >= 0) Unit
+                    try {
+                        running.errorStream.use { source ->
+                            val buffer = ByteArray(4096)
+                            while (source.read(buffer) >= 0) Unit
+                        }
+                    } catch (_: IOException) {
+                        // Android can close the pipe while a read is blocked during process teardown.
                     }
                 }
                 writer = launch(Dispatchers.IO) {
@@ -338,6 +348,7 @@ internal class TerminalTab(
                 terminate()
                 exited = true
                 ready = false
+                replyDraft = ""
                 alternate = false
                 onExit()
             }
@@ -354,6 +365,7 @@ internal class TerminalTab(
         when (value.getString("type")) {
             "started" -> {
                 ready = false
+                replyDraft = ""
                 if (blocks.size >= 100) blocks.removeAt(0)
                 blocks.add(CommandBlock(nextBlock++, pendingCommand ?: value.getString("command")))
                 pendingCommand = null
@@ -362,7 +374,10 @@ internal class TerminalTab(
                 Output(value.getString("text"), if (value.isNull("foreground")) null else value.getInt("foreground"),
                     value.getBoolean("bold")),
             )
-            "finished" -> blocks.lastOrNull()?.takeIf { it.code == null }?.code = value.getInt("code")
+            "finished" -> {
+                blocks.lastOrNull()?.takeIf { it.code == null }?.code = value.getInt("code")
+                replyDraft = ""
+            }
             "prompt" -> {
                 handshake = true
                 pendingCommand = null
@@ -381,6 +396,13 @@ internal class TerminalTab(
         input(byteArrayOf(13))
         draft = ""
         ready = false
+    }
+
+    fun sendReply() {
+        if (!running) return
+        val line = replyDraft.replace('\r', ' ').replace('\n', ' ')
+        input((line + '\r').toByteArray())
+        replyDraft = ""
     }
 
     fun input(bytes: ByteArray) {

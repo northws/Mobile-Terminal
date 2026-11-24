@@ -18,4 +18,7 @@ run_gradle :app:assembleDebugAndroidTest
 "$adb" install -r -t "$root/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
 "$adb" shell am instrument -w -r dev.warpterminal.mobile.test/androidx.test.runner.AndroidJUnitRunner |
     tee "$artifacts/device-test.txt"
+if grep -Eq 'Process crashed|INSTRUMENTATION_FAILED|FAILURES!!!' "$artifacts/device-test.txt"; then
+    exit 1
+fi
 grep -q 'OK (' "$artifacts/device-test.txt"
