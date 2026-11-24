@@ -1,10 +1,20 @@
 # Mobile Terminal 验证记录
 
+## 0.2.5 终端应用标签
+
+2026 年 11 月 24 日通过 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）覆盖安装。APK v2 签名及 SHA-256 校验通过，设备安装包哈希与本地相同，为 `9439628e786c35fb60f04c85de578adddee4fd7295d6e3310e0ced1767c8dd73`。五项 Android JVM 测试和五项设备测试通过。新增设备用例检查终端画布只修改标签的绘制范围。[0.2.5 SHA-256 文件](../build/mobile-terminal-arm64-debug.apk.sha256) · [设备测试日志](../build/tui-device-test.txt)
+
+- OpenCode 2.4.1 全屏界面的「＋ 新标签」、标签栏、「键盘」和「关闭标签」可见。用「键盘」输入测试文字，切换至 Bash 后可继续切回 OpenCode，退出状态为 `0`。
+- 从菜单直接打开 Vim 并退出。再从 Bash 用 Vim 打开临时文件，确认独立应用标签自动出现。切换至 Bash、暂时关闭并重新打开 Vim 标签后，仍能保存之前输入的文字，并从原 Bash 读回相同文本。
+- 通过「其他终端应用」运行 `cat`，在标签内输入并用 `Ctrl+C` 退出。图形应用 `xeyes` 仍可在独立标签打开和关闭。
+- 在 Bash 回看 220 行测试输出，切回 Vim 并退出后，原 Bash 仍停在回看位置，可用「回到最新」恢复跟随。
+- Bash 显示 `[Y/n]` 时切换标签，返回后发送 `n`，原命令收到回复并以 `0` 退出。单行进程输入和多行 Bash 命令分别恢复滚动状态。
+
 ## 0.2.4 OpenCode
 
 OpenCode 2.4.1 的启动探测包含 Kitty 图形查询。0.2.3 的终端后端处理该序列时读取了尚未初始化的 Warp 功能开关，进程以 `101` 退出。修复版在解析终端输出前完成初始化，功能开关使用上游默认值。
 
-WSL2 的两项 Rust 单元测试、真实 Bash PTY 回放和五项 Android JVM 测试通过。回放在两批输出之间切分 Kitty 查询，并覆盖超链接序列和备用屏幕切换。Warp 在 Debian 加载 Bash 配置后追加 `~/.local/bin` 和 `~/.opencode/bin`，两个入口使用相同的搜索路径。最终 ARM64 APK 通过 v2 签名和 SHA-256 校验，哈希为 `4623dcbd25caa4d2df29bbe5d72b17187351a0d5bf12300ebce6f6800892373f`。[0.2.4 SHA-256 文件](../build/mobile-terminal-arm64-debug.apk.sha256)
+WSL2 的两项 Rust 单元测试、真实 Bash PTY 回放和五项 Android JVM 测试通过。回放在两批输出之间切分 Kitty 查询，并覆盖超链接序列和备用屏幕切换。Warp 在 Debian 加载 Bash 配置后追加 `~/.local/bin` 和 `~/.opencode/bin`，两个入口使用相同的搜索路径。最终 ARM64 APK 通过 v2 签名和 SHA-256 校验，哈希为 `4623dcbd25caa4d2df29bbe5d72b17187351a0d5bf12300ebce6f6800892373f`。[0.2.4 SHA-256 文件](https://github.com/northws/Mobile-Terminal/releases/download/v0.2.4/mobile-terminal-arm64-debug.apk.sha256)
 
 2026 年 11 月 24 日通过 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）覆盖安装，设备安装包与本地哈希一致。四项 Android 设备测试通过，其中 Bash 会话测试核对了两个用户安装目录。[设备测试日志](../build/opencode-device-test.txt)
 

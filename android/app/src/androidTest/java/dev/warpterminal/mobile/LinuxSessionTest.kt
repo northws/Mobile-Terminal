@@ -1,5 +1,8 @@
 package dev.warpterminal.mobile
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.DataInputStream
@@ -18,12 +21,30 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class LinuxSessionTest {
+    @Test fun terminalGridDrawsOnlyInsideItsTab() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val grid = TerminalGrid(context, TerminalTab(1, LinuxEnvironment(context), this) {})
+            grid.layout(0, 0, 40, 24)
+            val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(Color.MAGENTA)
+            canvas.translate(8f, 16f)
+            grid.draw(canvas)
+
+            assertEquals(Color.MAGENTA, bitmap.getPixel(24, 8))
+            assertEquals(Color.MAGENTA, bitmap.getPixel(24, 48))
+            assertNotEquals(Color.MAGENTA, bitmap.getPixel(24, 24))
+        }
+    }
+
     @Test fun runningBlockAcceptsMultipleRepliesAndAnEmptyEnter() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val linux = LinuxEnvironment(context)

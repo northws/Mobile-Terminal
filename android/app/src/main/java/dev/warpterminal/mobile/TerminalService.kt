@@ -40,10 +40,14 @@ internal sealed interface Installation {
     data object Ready : Installation
 }
 
-internal enum class TerminalProfile(val label: String, val startupCommand: String? = null) {
-    Bash("Bash"),
-    OpenCode("OpenCode", "opencode"),
+internal data class TerminalApp(val name: String, val command: String) {
+    companion object {
+        val OpenCode = TerminalApp("OpenCode", "opencode")
+        val Vim = TerminalApp("Vim", "vim")
+    }
 }
+
+internal data class TerminalAppTab(val id: Int, val title: String, val session: TerminalTab)
 
 class TerminalService : Service() {
     internal inner class LocalBinder : Binder() {
@@ -54,6 +58,7 @@ class TerminalService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     internal val linux by lazy { LinuxEnvironment(this) }
     internal val tabs = mutableStateListOf<TerminalTab>()
+    internal val terminalAppTabs = mutableStateListOf<TerminalAppTab>()
     internal val graphics by lazy {
         GraphicsSessions(this, linux, scope, { nextId++ }, {
             selectTab(it)
@@ -87,7 +92,11 @@ class TerminalService : Service() {
         when (intent?.action) {
             INSTALL -> install()
             ADD_TAB -> addTab()
-            ADD_OPENCODE -> addTab(TerminalProfile.OpenCode)
+            ADD_TERMINAL_APP -> {
+                val name = intent.getStringExtra(APP_NAME)?.takeIf { it.isNotBlank() }
+                val command = intent.getStringExtra(APP_COMMAND)?.takeIf { it.isNotBlank() }
+                if (name != null && command != null) addTab(TerminalApp(name, command))
+            }
             INSTALL_GRAPHICS -> if (installation == Installation.Ready) graphics.installExamples()
             ADD_GRAPHICS, ADD_COMPATIBLE_CHROMIUM -> if (installation == Installation.Ready) {
                 val id = intent.getStringExtra(APP_ID)
@@ -121,9 +130,9 @@ class TerminalService : Service() {
         }
     }
 
-    private fun addTab(profile: TerminalProfile = TerminalProfile.Bash) {
+    private fun addTab(app: TerminalApp? = null) {
         if (installation != Installation.Ready || tabs.size >= MAX_TABS) return
-        val tab = TerminalTab(nextId++, linux, scope, profile, ::sessionEnded)
+        val tab = TerminalTab(nextId++, linux, scope, app, ::terminalAppChanged, ::sessionEnded)
         tabs.add(tab)
         selectTab(tab.id)
         interrupted = false
@@ -151,6 +160,7 @@ class TerminalService : Service() {
 
     internal fun closeTab(tab: TerminalTab) {
         if (!tabs.remove(tab)) return
+        terminalAppTabs.removeAll { it.session == tab }
         retiring.add(tab)
         tab.close()
         restoreSelection()
@@ -163,8 +173,35 @@ class TerminalService : Service() {
         selected = id
     }
 
+    internal fun openTerminalApp(tab: TerminalTab) {
+        showTerminalApp(tab, focus = true)
+    }
+
+    internal fun closeTerminalApp(app: TerminalAppTab) {
+        if (!terminalAppTabs.remove(app)) return
+        if (selected == app.id && app.session in tabs) selectTab(app.session.id)
+        restoreSelection()
+    }
+
+    private fun terminalAppChanged(tab: TerminalTab, open: Boolean) {
+        if (open) {
+            showTerminalApp(tab, focus = selected == tab.id)
+        } else {
+            terminalAppTabs.firstOrNull { it.session == tab }?.let(::closeTerminalApp)
+        }
+    }
+
+    private fun showTerminalApp(tab: TerminalTab, focus: Boolean) {
+        if (tab !in tabs || tab.exited || !tab.running && !tab.alternate) return
+        val app = terminalAppTabs.firstOrNull { it.session == tab } ?: run {
+            val title = tab.blocks.lastOrNull()?.command?.lineSequence()?.firstOrNull()?.trim()?.take(80)
+            TerminalAppTab(nextId++, title.orEmpty().ifBlank { "终端应用" }, tab).also(terminalAppTabs::add)
+        }
+        if (focus) selectTab(app.id)
+    }
+
     private fun restoreSelection() {
-        val openIds = tabs.map(TerminalTab::id) + graphics.tabs.map(GraphicsTab::id)
+        val openIds = tabs.map(TerminalTab::id) + terminalAppTabs.map(TerminalAppTab::id) + graphics.tabs.map(GraphicsTab::id)
         recentTabs.retainAll(openIds.toSet())
         if (selected !in openIds) selected = recentTabs.lastOrNull() ?: 0
     }
@@ -222,12 +259,13 @@ class TerminalService : Service() {
     companion object {
         internal const val INSTALL = "install"
         internal const val ADD_TAB = "add_tab"
-        internal const val ADD_OPENCODE = "add_opencode"
+        internal const val ADD_TERMINAL_APP = "add_terminal_app"
         internal const val INSTALL_GRAPHICS = "install_graphics"
         internal const val ADD_GRAPHICS = "add_graphics"
         internal const val ADD_COMPATIBLE_CHROMIUM = "add_compatible_chromium"
         internal const val APP_ID = "app_id"
         internal const val APP_NAME = "app_name"
+        internal const val APP_COMMAND = "app_command"
         internal const val APP_FILE = "app_file"
         internal const val MAX_TABS = 8
         private const val CHANNEL = "linux_terminal"
@@ -238,10 +276,13 @@ internal class TerminalTab(
     val id: Int,
     private val linux: LinuxEnvironment,
     private val scope: CoroutineScope,
-    private val profile: TerminalProfile = TerminalProfile.Bash,
+    private val app: TerminalApp? = null,
+    private val onTerminalAppChanged: (TerminalTab, Boolean) -> Unit = { _, _ -> },
     private val onExit: () -> Unit,
 ) {
-    val title = "${profile.label} $id"
+    val title = "${app?.name ?: "Bash"} $id"
+    var showingStartupApp by mutableStateOf(app != null)
+        private set
     private val requests = Channel<Frame>(128)
     private var process: Process? = null
     private var handshake = false
@@ -338,6 +379,8 @@ internal class TerminalTab(
                 ready = false
                 replyDraft = ""
                 alternate = false
+                showingStartupApp = false
+                onTerminalAppChanged(this@TerminalTab, false)
                 onExit()
             }
         }
@@ -368,6 +411,7 @@ internal class TerminalTab(
             "finished" -> {
                 blocks.lastOrNull()?.takeIf { it.code == null }?.code = value.getInt("code")
                 replyDraft = ""
+                onTerminalAppChanged(this, false)
             }
             "prompt" -> {
                 val firstPrompt = !handshake
@@ -375,12 +419,19 @@ internal class TerminalTab(
                 pendingCommand = null
                 ready = true
                 if (!value.isNull("directory")) directory = value.getString("directory")
-                if (firstPrompt) profile.startupCommand?.let { command ->
-                    draft = command
+                if (firstPrompt && app != null) {
+                    draft = app.command
                     submit()
+                } else {
+                    showingStartupApp = false
+                    onTerminalAppChanged(this, false)
                 }
             }
-            "screen" -> alternate = value.getBoolean("alternate")
+            "screen" -> {
+                val wasAlternate = alternate
+                alternate = value.getBoolean("alternate")
+                if (!wasAlternate && alternate && !showingStartupApp) onTerminalAppChanged(this, true)
+            }
             "exit" -> blocks.lastOrNull()?.takeIf { it.code == null }?.code = value.getInt("code")
         }
     }

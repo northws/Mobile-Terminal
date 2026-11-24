@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -83,15 +84,9 @@ class MainActivity : ComponentActivity() {
                             CircularProgressIndicator()
                         }
                     } else {
-                        TerminalHome(service) { action, app ->
-                            val intent = Intent(this, TerminalService::class.java).setAction(action)
-                            if (app != null) {
-                                intent.putExtra(TerminalService.APP_ID, app.id)
-                                intent.putExtra(TerminalService.APP_NAME, app.name)
-                                intent.putExtra(TerminalService.APP_FILE, app.desktopFile)
-                            }
+                        TerminalHome(service) { intent ->
                             ContextCompat.startForegroundService(
-                                this, intent,
+                                this, intent.setClass(this, TerminalService::class.java),
                             )
                         }
                     }
@@ -120,16 +115,36 @@ private val WarpColors = darkColorScheme(
 )
 
 @Composable
-private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) -> Unit) {
+private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
     val notices = remember { SnackbarHostState() }
     val tab = service.tabs.firstOrNull { it.id == service.selected }
     val graphics = service.graphics
     val window = graphics.tabs.firstOrNull { it.id == service.selected }
+    val application = service.terminalAppTabs.firstOrNull { it.id == service.selected }
+    val commandBlockStates = rememberSaveableStateHolder()
+    val sessionIds = service.tabs.map(TerminalTab::id)
+    var previousSessionIds by rememberSaveable { mutableStateOf(emptyList<Int>()) }
+    LaunchedEffect(sessionIds) {
+        (previousSessionIds - sessionIds.toSet()).forEach(commandBlockStates::removeState)
+        previousSessionIds = sessionIds
+    }
     var menu by remember { mutableStateOf(false) }
     var showApps by rememberSaveable { mutableStateOf(false) }
+    var showCommand by rememberSaveable { mutableStateOf(false) }
     var confirmChromium by remember { mutableStateOf<LinuxApp?>(null) }
     val keyboard = LocalSoftwareKeyboardController.current
-    fun bash() = start(TerminalService.ADD_TAB, null)
+    LaunchedEffect(service.selected) { keyboard?.hide() }
+    fun bash() = start(Intent(TerminalService.ADD_TAB))
+    fun openApp(app: TerminalApp) {
+        keyboard?.hide()
+        start(Intent(TerminalService.ADD_TERMINAL_APP)
+            .putExtra(TerminalService.APP_NAME, app.name)
+            .putExtra(TerminalService.APP_COMMAND, app.command))
+    }
+    fun openGraphics(action: String, app: LinuxApp) = start(Intent(action)
+        .putExtra(TerminalService.APP_ID, app.id)
+        .putExtra(TerminalService.APP_NAME, app.name)
+        .putExtra(TerminalService.APP_FILE, app.desktopFile))
     Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -145,7 +160,11 @@ private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) ->
                         DropdownMenuItem(text = { Text("Bash") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
                             onClick = { menu = false; bash() })
                         DropdownMenuItem(text = { Text("OpenCode") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
-                            onClick = { menu = false; start(TerminalService.ADD_OPENCODE, null) })
+                            onClick = { menu = false; openApp(TerminalApp.OpenCode) })
+                        DropdownMenuItem(text = { Text("Vim") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
+                            onClick = { menu = false; openApp(TerminalApp.Vim) })
+                        DropdownMenuItem(text = { Text("其他终端应用") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
+                            onClick = { menu = false; showCommand = true })
                         DropdownMenuItem(text = { Text("图形应用") },
                             onClick = { menu = false; showApps = true })
                     }
@@ -156,7 +175,7 @@ private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) ->
 
         when (val state = service.installation) {
             Installation.Absent -> InstallCard("在手机上安装 Debian", "首次安装需要联网和 600 MB 可用空间。") {
-                start(TerminalService.INSTALL, null)
+                start(Intent(TerminalService.INSTALL))
             }
             is Installation.Working -> Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(state.message, style = MaterialTheme.typography.titleMedium)
@@ -164,9 +183,9 @@ private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) ->
                 else LinearProgressIndicator(Modifier.fillMaxWidth())
             }
             is Installation.Failed -> InstallCard("安装未完成", state.message, "重试") {
-                start(TerminalService.INSTALL, null)
+                start(Intent(TerminalService.INSTALL))
             }
-            Installation.Ready -> if (tab == null && window == null) {
+            Installation.Ready -> if (tab == null && window == null && application == null) {
                 InstallCard(if (service.interrupted) "上次会话已结束" else "打开本地终端",
                     "Linux 主目录保存在此设备上。", "打开 Bash", ::bash)
             } else {
@@ -174,19 +193,35 @@ private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) ->
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     val labels = service.tabs.map { it.id to if (it.exited) "${it.title} · 已结束" else it.title } +
-                        graphics.tabs.map { it.id to it.title }
+                        service.terminalAppTabs.map { it.id to it.title } + graphics.tabs.map { it.id to it.title }
                     labels.sortedBy { it.first }.forEach { (id, label) ->
                         FilterChip(selected = id == service.selected,
-                            onClick = {
-                                if (id != service.selected) keyboard?.hide()
-                                service.selectTab(id)
-                            },
+                            onClick = { service.selectTab(id) },
                             label = { Text(label, Modifier.widthIn(max = 180.dp), maxLines = 1,
                                 overflow = TextOverflow.MiddleEllipsis) })
                     }
                 }
                 if (tab != null) {
-                    key(tab.id) { SessionPanel(tab, Modifier.weight(1f), close = { service.closeTab(tab) }) }
+                    key(tab.id) {
+                        if (tab.showingStartupApp) {
+                            TerminalAppPanel(tab.title, tab, Modifier.weight(1f), closesSession = true) {
+                                service.closeTab(tab)
+                            }
+                        } else {
+                            commandBlockStates.SaveableStateProvider(tab.id) {
+                                SessionPanel(tab, Modifier.weight(1f),
+                                    appActive = tab.alternate || service.terminalAppTabs.any { it.session == tab },
+                                    openApp = { service.openTerminalApp(tab) },
+                                    close = { service.closeTab(tab) })
+                            }
+                        }
+                    }
+                } else if (application != null) {
+                    key(application.id) {
+                        TerminalAppPanel(application.title, application.session, Modifier.weight(1f)) {
+                            service.closeTerminalApp(application)
+                        }
+                    }
                 } else if (window != null) {
                     key(window.id) { GraphicsPanel(window, Modifier.weight(1f)) { graphics.close(window) } }
                 }
@@ -194,13 +229,19 @@ private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) ->
         }
         SnackbarHost(notices)
     }
+    if (showCommand && service.installation == Installation.Ready) {
+        TerminalCommandPicker(close = { showCommand = false }, open = {
+            showCommand = false
+            openApp(it)
+        })
+    }
     if (showApps && service.installation == Installation.Ready) {
         GraphicsPicker(graphics, close = { showApps = false },
-            install = { start(TerminalService.INSTALL_GRAPHICS, null) },
+            install = { start(Intent(TerminalService.INSTALL_GRAPHICS)) },
             open = { app ->
                 showApps = false
                 keyboard?.hide()
-                if (app.isDebianChromium) confirmChromium = app else start(TerminalService.ADD_GRAPHICS, app)
+                if (app.isDebianChromium) confirmChromium = app else openGraphics(TerminalService.ADD_GRAPHICS, app)
             })
     }
     confirmChromium?.let { app ->
@@ -211,12 +252,32 @@ private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) ->
             confirmButton = {
                 TextButton(onClick = {
                     confirmChromium = null
-                    start(TerminalService.ADD_COMPATIBLE_CHROMIUM, app)
+                    openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app)
                 }) { Text("兼容启动") }
             },
             dismissButton = { TextButton(onClick = { confirmChromium = null }) { Text("取消") } },
         )
     }
+}
+
+@Composable
+private fun TerminalCommandPicker(close: () -> Unit, open: (TerminalApp) -> Unit) {
+    var command by rememberSaveable { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text("打开终端应用") },
+        text = {
+            OutlinedTextField(command, { if (it.length <= 4096) command = it },
+                label = { Text("命令与参数") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        },
+        confirmButton = {
+            TextButton(enabled = command.isNotBlank(), onClick = {
+                val input = command.trim()
+                open(TerminalApp(input.take(80), input))
+            }) { Text("打开") }
+        },
+        dismissButton = { TextButton(onClick = close) { Text("取消") } },
+    )
 }
 
 @Composable
@@ -268,11 +329,7 @@ private fun GraphicsPicker(graphics: GraphicsSessions, close: () -> Unit, instal
 private fun GraphicsPanel(tab: GraphicsTab, modifier: Modifier, close: () -> Unit) {
     var view by remember { mutableStateOf<GraphicsView?>(null) }
     Column(modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(tab.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            TextButton(onClick = { view?.showKeyboard() }, enabled = view != null) { Text("键盘") }
-            TextButton(onClick = close) { Text("关闭标签") }
-        }
+        AppTabToolbar(tab.title, view != null, keyboard = { view?.showKeyboard() }, close = close)
         val error = tab.error
         when {
             error != null -> Text(error, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
@@ -290,6 +347,68 @@ private fun GraphicsPanel(tab: GraphicsTab, modifier: Modifier, close: () -> Uni
 }
 
 @Composable
+private fun AppTabToolbar(title: String, keyboardReady: Boolean, keyboard: () -> Unit, close: () -> Unit) {
+    Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        TextButton(onClick = keyboard, enabled = keyboardReady) { Text("键盘") }
+        TextButton(onClick = close) { Text("关闭标签") }
+    }
+}
+
+@Composable
+private fun TerminalAppPanel(
+    title: String,
+    tab: TerminalTab,
+    modifier: Modifier,
+    closesSession: Boolean = false,
+    close: () -> Unit,
+) {
+    var view by remember { mutableStateOf<TerminalGrid?>(null) }
+    var confirmClose by rememberSaveable { mutableStateOf(false) }
+    Column(modifier.fillMaxWidth()) {
+        AppTabToolbar(title, view != null, keyboard = { view?.showKeyboard() }, close = {
+            if (closesSession && tab.running) confirmClose = true else close()
+        })
+        TerminalSurface(tab, Modifier.weight(1f)) { view = it }
+    }
+    if (confirmClose) {
+        AlertDialog(
+            onDismissRequest = { confirmClose = false },
+            title = { Text("关闭终端应用？") },
+            text = { Text("如有未保存的更改，请先在应用内保存。关闭标签将结束此会话。") },
+            confirmButton = { TextButton(onClick = close) { Text("关闭标签") } },
+            dismissButton = { TextButton(onClick = { confirmClose = false }) { Text("取消") } },
+        )
+    }
+}
+
+@Composable
+private fun TerminalSurface(tab: TerminalTab, modifier: Modifier, onView: (TerminalGrid?) -> Unit = {}) {
+    val clipboard = LocalClipboardManager.current
+    Column(modifier.fillMaxWidth()) {
+        val revision = tab.revision
+        AndroidView(
+            factory = { context -> TerminalGrid(context, tab).also(onView) },
+            update = { if (revision >= 0) it.invalidate() },
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            onRelease = { onView(null) },
+        )
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            TextButton(onClick = { tab.control() }) { Text("Ctrl") }
+            TextButton(onClick = { tab.input(byteArrayOf(3)) }) { Text("Ctrl+C") }
+            Shortcut("Esc", KeyEvent.KEYCODE_ESCAPE, tab)
+            Shortcut("Tab", KeyEvent.KEYCODE_TAB, tab)
+            Shortcut("←", KeyEvent.KEYCODE_DPAD_LEFT, tab)
+            Shortcut("↑", KeyEvent.KEYCODE_DPAD_UP, tab)
+            Shortcut("↓", KeyEvent.KEYCODE_DPAD_DOWN, tab)
+            Shortcut("→", KeyEvent.KEYCODE_DPAD_RIGHT, tab)
+            TextButton(onClick = { clipboard.getText()?.text?.let(tab::paste) }) { Text("粘贴") }
+        }
+    }
+}
+
+@Composable
 private fun InstallCard(title: String, body: String, action: String = "安装 Debian", onClick: () -> Unit) {
     Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(title, style = MaterialTheme.typography.headlineSmall)
@@ -299,9 +418,14 @@ private fun InstallCard(title: String, body: String, action: String = "安装 De
 }
 
 @Composable
-private fun SessionPanel(tab: TerminalTab, modifier: Modifier, close: () -> Unit) {
-    val raw = tab.alternate || tab.rawMode
-    val clipboard = LocalClipboardManager.current
+private fun SessionPanel(
+    tab: TerminalTab,
+    modifier: Modifier,
+    appActive: Boolean,
+    openApp: () -> Unit,
+    close: () -> Unit,
+) {
+    val raw = tab.rawMode && !appActive
     val state = rememberLazyListState()
     var followTail by rememberSaveable { mutableStateOf(true) }
     var outputHeight by remember { mutableIntStateOf(0) }
@@ -325,34 +449,25 @@ private fun SessionPanel(tab: TerminalTab, modifier: Modifier, close: () -> Unit
             if (!raw && !followTail) {
                 TextButton(onClick = { followTail = true }) { Text("回到最新") }
             }
-            TextButton(onClick = { tab.rawMode = !tab.rawMode }, enabled = !tab.alternate && !tab.exited) {
-                Text(if (tab.rawMode) "命令块" else "终端")
+            if (appActive) {
+                TextButton(onClick = openApp) { Text("打开终端应用") }
+            } else {
+                TextButton(onClick = { if (tab.running && !raw) openApp() else tab.rawMode = !raw },
+                    enabled = !tab.exited) {
+                    Text(if (raw) "命令块" else "终端")
+                }
             }
             TextButton(onClick = close) { Text("关闭") }
         }
         tab.error?.let { Text(it, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
         if (raw) {
-            val revision = tab.revision
-            AndroidView(
-                factory = { TerminalGrid(it, tab).apply { requestFocus() } },
-                update = { if (revision >= 0) it.invalidate() },
-                modifier = Modifier.fillMaxWidth().weight(1f),
-            )
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                TextButton(onClick = { tab.control() }) { Text("Ctrl") }
-                TextButton(onClick = { tab.input(byteArrayOf(3)) }) { Text("Ctrl+C") }
-                Shortcut("Esc", KeyEvent.KEYCODE_ESCAPE, tab)
-                Shortcut("Tab", KeyEvent.KEYCODE_TAB, tab)
-                Shortcut("←", KeyEvent.KEYCODE_DPAD_LEFT, tab)
-                Shortcut("↑", KeyEvent.KEYCODE_DPAD_UP, tab)
-                Shortcut("↓", KeyEvent.KEYCODE_DPAD_DOWN, tab)
-                Shortcut("→", KeyEvent.KEYCODE_DPAD_RIGHT, tab)
-                TextButton(onClick = { clipboard.getText()?.text?.let(tab::paste) }) { Text("粘贴") }
-            }
+            TerminalSurface(tab, Modifier.weight(1f))
         } else {
             val lastBlock = tab.blocks.lastOrNull()
             LaunchedEffect(state) {
-                snapshotFlow { !state.isScrollInProgress && !state.canScrollForward }.collect { atTail ->
+                snapshotFlow {
+                    state.layoutInfo.totalItemsCount > 0 && !state.isScrollInProgress && !state.canScrollForward
+                }.collect { atTail ->
                     if (atTail) followTail = true
                 }
             }
@@ -364,7 +479,7 @@ private fun SessionPanel(tab: TerminalTab, modifier: Modifier, close: () -> Unit
             LazyColumn(
                 Modifier.weight(1f).fillMaxWidth().nestedScroll(manualScroll).onSizeChanged { size ->
                     outputHeight = size.height
-                    TerminalGrid.resize(tab, measure, size.width, size.height)
+                    if (!appActive) TerminalGrid.resize(tab, measure, size.width, size.height)
                 },
                 state = state, contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -375,35 +490,37 @@ private fun SessionPanel(tab: TerminalTab, modifier: Modifier, close: () -> Unit
                 items(tab.blocks, key = { it.id }) { block -> BlockCard(block) }
                 if (tab.blocks.isNotEmpty()) item(key = "output-tail") { Spacer(Modifier.height(1.dp)) }
             }
-            if (!tab.exited) {
+            if (!tab.exited && !appActive) {
                 val running = tab.running
                 Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = if (running) tab.replyDraft else tab.draft,
-                        onValueChange = {
-                            if (it.length <= 16_384) {
-                                if (running) tab.replyDraft = it else if (tab.ready) tab.draft = it
-                            }
-                        },
-                        modifier = Modifier.weight(1f).onPreviewKeyEvent { event ->
-                            val key = event.nativeKeyEvent
-                            if (tab.running && (key.keyCode == KeyEvent.KEYCODE_ENTER ||
-                                    key.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
-                            ) {
-                                if (key.action == KeyEvent.ACTION_DOWN && key.repeatCount == 0) tab.sendReply()
-                                true
-                            } else false
-                        },
-                        label = { Text(if (running) "进程输入" else "Bash 命令") },
-                        singleLine = running,
-                        maxLines = if (running) 1 else 5,
-                        enabled = tab.ready || running,
-                        keyboardOptions = if (running) KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Send)
-                            else KeyboardOptions.Default,
-                        keyboardActions = KeyboardActions(onSend = { tab.sendReply() }),
-                        textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
-                    )
+                    key(running) {
+                        OutlinedTextField(
+                            value = if (running) tab.replyDraft else tab.draft,
+                            onValueChange = {
+                                if (it.length <= 16_384) {
+                                    if (running) tab.replyDraft = it else if (tab.ready) tab.draft = it
+                                }
+                            },
+                            modifier = Modifier.weight(1f).onPreviewKeyEvent { event ->
+                                val key = event.nativeKeyEvent
+                                if (tab.running && (key.keyCode == KeyEvent.KEYCODE_ENTER ||
+                                        key.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
+                                ) {
+                                    if (key.action == KeyEvent.ACTION_DOWN && key.repeatCount == 0) tab.sendReply()
+                                    true
+                                } else false
+                            },
+                            label = { Text(if (running) "进程输入" else "Bash 命令") },
+                            singleLine = running,
+                            maxLines = if (running) 1 else 5,
+                            enabled = tab.ready || running,
+                            keyboardOptions = if (running) KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Send)
+                                else KeyboardOptions.Default,
+                            keyboardActions = KeyboardActions(onSend = { tab.sendReply() }),
+                            textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
+                        )
+                    }
                     if (running) {
                         Button(onClick = tab::sendReply) { Text("发送") }
                         FilledTonalButton(onClick = { tab.input(byteArrayOf(3)) },

@@ -15,6 +15,7 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import androidx.core.graphics.withClip
 import com.termux.terminal.KeyHandler
 import com.termux.terminal.TextStyle
 import com.termux.view.TerminalRenderer
@@ -26,8 +27,7 @@ internal class TerminalGrid(context: Context, private val tab: TerminalTab) : Vi
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(event: MotionEvent) = true
         override fun onSingleTapUp(event: MotionEvent): Boolean {
-            requestFocus()
-            context.getSystemService(InputMethodManager::class.java).showSoftInput(this@TerminalGrid, 0)
+            showKeyboard()
             return performClick()
         }
         override fun onScroll(first: MotionEvent?, second: MotionEvent, dx: Float, dy: Float): Boolean {
@@ -53,6 +53,16 @@ internal class TerminalGrid(context: Context, private val tab: TerminalTab) : Vi
     override fun onTouchEvent(event: MotionEvent): Boolean = gestures.onTouchEvent(event)
     override fun performClick(): Boolean { super.performClick(); return true }
     override fun onCheckIsTextEditor() = true
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        requestFocus()
+    }
+
+    fun showKeyboard() {
+        requestFocus()
+        context.getSystemService(InputMethodManager::class.java).showSoftInput(this, 0)
+    }
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
         outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
@@ -121,8 +131,10 @@ internal class TerminalGrid(context: Context, private val tab: TerminalTab) : Vi
         val emulator = tab.emulator
         if (emulator.isAlternateBufferActive) topRow = 0
         topRow = topRow.coerceIn(-emulator.screen.activeTranscriptRows, 0)
-        canvas.drawColor(emulator.mColors.mCurrentColors[TextStyle.COLOR_INDEX_BACKGROUND])
-        renderer.render(emulator, canvas, topRow, -1, -1, -1, -1)
+        canvas.withClip(0, 0, width, height) {
+            drawColor(emulator.mColors.mCurrentColors[TextStyle.COLOR_INDEX_BACKGROUND])
+            renderer.render(emulator, this, topRow, -1, -1, -1, -1)
+        }
     }
 
     companion object {
