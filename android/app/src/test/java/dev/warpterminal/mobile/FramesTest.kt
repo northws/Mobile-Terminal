@@ -18,7 +18,7 @@ class FramesTest {
         val terminal = "你好".toByteArray()
         DataOutputStream(bytes).apply {
             writeFrame(TERMINAL_FRAME, terminal)
-            writeFrame(JSON_FRAME, """{"type":"hello","version":1}""".toByteArray())
+            writeFrame(JSON_FRAME, """{"type":"hello","version":$PROTOCOL_VERSION}""".toByteArray())
         }
         val reader = DataInputStream(object : ByteArrayInputStream(bytes.toByteArray()) {
             override fun read(target: ByteArray, offset: Int, length: Int) =

@@ -40,27 +40,6 @@ internal sealed interface Installation {
     data object Ready : Installation
 }
 
-internal data class Output(val text: String, val foreground: Int?, val bold: Boolean)
-
-internal class CommandBlock(val id: Int, val command: String) {
-    val lines = mutableStateListOf<Output>()
-    private var length = 0
-    var truncated by mutableStateOf(false)
-        private set
-    var code by mutableStateOf<Int?>(null)
-
-    fun append(output: Output) {
-        if (length >= 64 * 1024 || lines.size >= 8_192) {
-            truncated = true
-            return
-        }
-        val text = output.text.take(64 * 1024 - length)
-        truncated = truncated || text.length != output.text.length
-        lines.add(output.copy(text = text))
-        length += text.length
-    }
-}
-
 class TerminalService : Service() {
     internal inner class LocalBinder : Binder() {
         val service get() = this@TerminalService
@@ -373,6 +352,9 @@ internal class TerminalTab(
             "output" -> blocks.lastOrNull()?.takeIf { it.code == null }?.append(
                 Output(value.getString("text"), if (value.isNull("foreground")) null else value.getInt("foreground"),
                     value.getBoolean("bold")),
+            )
+            "line_edit" -> blocks.lastOrNull()?.takeIf { it.code == null }?.editLine(
+                value.getString("operation"), value.optInt("column"),
             )
             "finished" -> {
                 blocks.lastOrNull()?.takeIf { it.code == null }?.code = value.getInt("code")

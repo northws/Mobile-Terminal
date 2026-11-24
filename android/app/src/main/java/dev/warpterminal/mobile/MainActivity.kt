@@ -29,8 +29,12 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -296,6 +300,19 @@ private fun InstallCard(title: String, body: String, action: String = "安装 De
 private fun SessionPanel(tab: TerminalTab, modifier: Modifier, close: () -> Unit) {
     val raw = tab.alternate || tab.rawMode
     val clipboard = LocalClipboardManager.current
+    val state = rememberLazyListState()
+    var followTail by rememberSaveable { mutableStateOf(true) }
+    var outputHeight by remember { mutableIntStateOf(0) }
+    val manualScroll = remember(state) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y > 0 && state.canScrollBackward) {
+                    followTail = false
+                }
+                return Offset.Zero
+            }
+        }
+    }
     Column(modifier) {
         Row(
             Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(start = 16.dp, end = 8.dp),
@@ -303,6 +320,9 @@ private fun SessionPanel(tab: TerminalTab, modifier: Modifier, close: () -> Unit
         ) {
             Text(tab.directory, Modifier.weight(1f), fontFamily = FontFamily.Monospace, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (!raw && !followTail) {
+                TextButton(onClick = { followTail = true }) { Text("回到最新") }
+            }
             TextButton(onClick = { tab.rawMode = !tab.rawMode }, enabled = !tab.alternate && !tab.exited) {
                 Text(if (tab.rawMode) "命令块" else "终端")
             }
@@ -328,22 +348,30 @@ private fun SessionPanel(tab: TerminalTab, modifier: Modifier, close: () -> Unit
                 TextButton(onClick = { clipboard.getText()?.text?.let(tab::paste) }) { Text("粘贴") }
             }
         } else {
-            val state = rememberLazyListState()
             val lastBlock = tab.blocks.lastOrNull()
-            LaunchedEffect(lastBlock?.id, lastBlock?.code) {
-                if (tab.blocks.isNotEmpty()) state.scrollToItem(tab.blocks.lastIndex)
+            LaunchedEffect(state) {
+                snapshotFlow { !state.isScrollInProgress && !state.canScrollForward }.collect { atTail ->
+                    if (atTail) followTail = true
+                }
+            }
+            LaunchedEffect(lastBlock?.id, lastBlock?.outputRevision, lastBlock?.code, followTail, outputHeight) {
+                if (followTail && tab.blocks.isNotEmpty()) state.requestScrollToItem(tab.blocks.size)
             }
             val context = LocalContext.current
             val measure = remember(context) { TerminalGrid.renderer(context) }
-            LazyColumn(Modifier.weight(1f).fillMaxWidth().onSizeChanged { size ->
-                TerminalGrid.resize(tab, measure, size.width, size.height)
-            }, state = state, contentPadding = PaddingValues(12.dp),
+            LazyColumn(
+                Modifier.weight(1f).fillMaxWidth().nestedScroll(manualScroll).onSizeChanged { size ->
+                    outputHeight = size.height
+                    TerminalGrid.resize(tab, measure, size.width, size.height)
+                },
+                state = state, contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (tab.blocks.isEmpty()) item {
                     Text(if (tab.ready) "输入第一条 Bash 命令" else if (tab.exited) "会话已结束" else "正在启动 Bash",
                         Modifier.padding(8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 items(tab.blocks, key = { it.id }) { block -> BlockCard(block) }
+                if (tab.blocks.isNotEmpty()) item(key = "output-tail") { Spacer(Modifier.height(1.dp)) }
             }
             if (!tab.exited) {
                 val running = tab.running
@@ -397,6 +425,7 @@ private fun Shortcut(label: String, key: Int, tab: TerminalTab) {
 @Composable
 private fun BlockCard(block: CommandBlock) {
     val clipboard = LocalClipboardManager.current
+    val output = block.lines
     Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(12.dp)) {
         Column(Modifier.fillMaxWidth().padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -407,10 +436,10 @@ private fun BlockCard(block: CommandBlock) {
                 Text(if (code == null) "运行中" else "退出 $code", fontSize = 12.sp,
                     color = if (code != null && code != 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
             }
-            if (block.lines.isNotEmpty()) {
+            if (output.isNotEmpty()) {
                 SelectionContainer(Modifier.padding(top = 8.dp)) {
                     Text(buildAnnotatedString {
-                        block.lines.forEach { line ->
+                        output.forEach { line ->
                             val color = line.foreground?.let { Color(it or 0xff000000.toInt()) } ?: Color.Unspecified
                             withStyle(SpanStyle(color = color, fontWeight = if (line.bold) FontWeight.Bold else null)) {
                                 append(line.text)
@@ -422,8 +451,8 @@ private fun BlockCard(block: CommandBlock) {
             if (block.truncated) Text("命令块输出已截断。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row {
                 TextButton(onClick = { clipboard.setText(AnnotatedString(block.command)) }) { Text("复制命令") }
-                if (block.lines.isNotEmpty()) TextButton(onClick = {
-                    clipboard.setText(AnnotatedString(block.lines.joinToString("") { it.text }))
+                if (output.isNotEmpty()) TextButton(onClick = {
+                    clipboard.setText(AnnotatedString(output.joinToString("") { it.text }))
                 }) { Text("复制输出") }
             }
         }

@@ -60,6 +60,12 @@ class LinuxSessionTest {
                 assertEquals(1, tab.blocks.size)
                 assertEquals(0, tab.blocks.single().code)
                 assertTrue(output().contains("RESULT=<n,default>"))
+                tab.draft = "printf 'keep\\nAPT 0%%'; sleep 0.1; printf '\\r\\033[KAPT 100%%\\n'"
+                tab.submit()
+            }
+            await { tab.ready && tab.blocks.size == 2 }
+            withContext(Dispatchers.Main) {
+                assertEquals("keep\nAPT 100%\n", output())
             }
         } finally {
             withContext(Dispatchers.Main) { tab.close() }

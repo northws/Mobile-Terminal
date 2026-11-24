@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use serde_json::{Value, json};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const JSON: u8 = 0;
 pub const TERMINAL: u8 = 1;
 const MAX_FRAME: usize = 256 * 1024;

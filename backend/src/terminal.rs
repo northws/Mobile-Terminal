@@ -40,6 +40,13 @@ impl Terminal {
         }
     }
 
+    fn line_edit(&mut self, operation: &str, column: Option<usize>) {
+        if self.active && !self.alternate {
+            self.flush_text();
+            self.events.push(json!({"type":"line_edit", "operation":operation, "column":column}));
+        }
+    }
+
     fn finish(&mut self, code: i32) {
         self.flush_text();
         if self.active {
@@ -106,7 +113,7 @@ impl Handler for Terminal {
     }
 
     fn backspace(&mut self) {
-        self.text.pop();
+        self.line_edit("backspace", None);
     }
 
     fn linefeed(&mut self) -> ScrollDelta {
@@ -156,13 +163,13 @@ impl Handler for Terminal {
         }
     }
 
-    // The Android VT renderer handles cursor operations and device replies from the raw stream.
+    // The Android VT renderer handles full-screen cursor operations and device replies.
     fn set_title(&mut self, _: Option<String>) {}
     fn set_cursor_style(&mut self, _: Option<CursorStyle>) {}
     fn set_cursor_shape(&mut self, _shape: CursorShape) {}
     fn goto(&mut self, _: VisibleRow, _: usize) {}
     fn goto_line(&mut self, _: VisibleRow) {}
-    fn goto_col(&mut self, _: usize) {}
+    fn goto_col(&mut self, column: usize) { self.line_edit("column", Some(column)); }
     fn insert_blank(&mut self, _: usize) {}
     fn move_up(&mut self, _: usize) {}
     fn move_down(&mut self, _: usize) {}
@@ -173,7 +180,7 @@ impl Handler for Terminal {
     fn move_backward(&mut self, _: usize) {}
     fn move_down_and_cr(&mut self, _: usize) {}
     fn move_up_and_cr(&mut self, _: usize) {}
-    fn carriage_return(&mut self) {}
+    fn carriage_return(&mut self) { self.line_edit("column", Some(0)); }
     fn bell(&mut self) {}
     fn substitute(&mut self) {}
     fn set_horizontal_tabstop(&mut self) {}
@@ -187,7 +194,14 @@ impl Handler for Terminal {
     fn move_forward_tabs(&mut self, _count: u16) {}
     fn save_cursor_position(&mut self) {}
     fn restore_cursor_position(&mut self) {}
-    fn clear_line(&mut self, _mode: LineClearMode) {}
+    fn clear_line(&mut self, mode: LineClearMode) {
+        let operation = match mode {
+            LineClearMode::Right => "clear_right",
+            LineClearMode::Left => "clear_left",
+            LineClearMode::All => "clear_all",
+        };
+        self.line_edit(operation, None);
+    }
     fn clear_screen(&mut self, _mode: ClearMode) {}
     fn clear_tabs(&mut self, _mode: TabulationClearMode) {}
     fn reset_state(&mut self) {}

@@ -72,7 +72,7 @@ def main(executable):
         second = Terminal(executable, home)
         try:
             for terminal in (first, second):
-                assert terminal.until("hello") == [{"type": "hello", "version": 1}]
+                assert terminal.until("hello") == [{"type": "hello", "version": 2}]
                 assert terminal.until("prompt")[-1]["directory"] == home
             assert first.command("printf '你好\\n' | cat") == "你好\n"
             first.command("false", 1)
@@ -82,6 +82,23 @@ def main(executable):
             assert second.command("pwd").strip() == home
             first.event("resize", rows=40, columns=120)
             assert first.command("stty size").strip() == "40 120"
+            first.send(b"printf 'Progress 0%%'; sleep 0.1; printf '\\r\\033[KProgress 50%%'; "
+                       b"sleep 0.1; printf '\\r\\033[KProgress 100%%\\n'\r")
+            progress = []
+            for event in first.until("prompt"):
+                if event["type"] == "output":
+                    if progress and progress[-1][0] == "text":
+                        progress[-1] = ("text", progress[-1][1] + event["text"])
+                    else:
+                        progress.append(("text", event["text"]))
+                elif event["type"] == "line_edit":
+                    progress.append((event["operation"], event["column"]))
+            start = progress.index(("text", "Progress 0%"))
+            assert progress[start:] == [
+                ("text", "Progress 0%"), ("column", 0), ("clear_right", None),
+                ("text", "Progress 50%"), ("column", 0), ("clear_right", None),
+                ("text", "Progress 100%"), ("column", 0), ("text", "\n"),
+            ], progress
             first.send(b"sleep 30\r")
             first.until("started")
             time.sleep(0.15)
@@ -94,7 +111,7 @@ def main(executable):
         finally:
             first.close()
             second.close()
-    print("Real Warp Bash PTY, commands, exit status, Ctrl+C, resize, alternate screen and independent tabs passed.")
+    print("Real Warp Bash PTY, commands, exit status, Ctrl+C, resize, progress edits, alternate screen and independent tabs passed.")
 
 
 if __name__ == "__main__":

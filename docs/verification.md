@@ -1,8 +1,16 @@
 # Mobile Terminal 验证记录
 
+## 0.2.3 进度与滚动
+
+通过 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）覆盖安装。设备安装包与本地 SHA-256 一致，为 `6e32bf8e297eda0ad7c36b8f68a77dfe2868c62482079631926ef2501e788816`。APK v2 签名、两项 Rust 单元测试、真实 Bash PTY 回放、五项 Android JVM 测试和四项设备测试均通过。[SHA-256 文件](../build/mobile-terminal-arm64-debug.apk.sha256) · [设备测试日志](../build/progress-device-test.txt)
+
+- 在 0.2.2 中，同一次 APT 请求重复显示多个读取进度。0.2.3 中读取列表、构建依赖树和读取状态各保留一行。回复 `n` 仍可取消并返回 Bash。
+- 同一 Bash 命令分三批各输出 100 行。界面先跟随第一批末尾。手动回看时，收到第二批后仍停在回看位置。点「回到最新」到达第二批末尾，第三批输出后继续自动跟随。
+- 后端回放覆盖分片输出中的回车和清行顺序。Android 用例验证保留已完成的行、当前行覆盖、输出样式和短文本覆盖时留下的行尾。
+
 ## 0.2.2 交互输入与 Chromium
 
-ARM64 APK 已通过 APK v2 签名和 SHA-256 校验，设备安装包哈希与本地一致，为 `04a52627aa91a4d96df7004577b46e0936a00eec677b84e17fb367410e1b8f47`。WSL2 的两项 Rust 单元测试、真实 Bash PTY 回归及三项 Android JVM 测试通过。[SHA-256 文件](../build/mobile-terminal-arm64-debug.apk.sha256)
+ARM64 APK 已通过 APK v2 签名和 SHA-256 校验，设备安装包哈希与本地一致，为 `04a52627aa91a4d96df7004577b46e0936a00eec677b84e17fb367410e1b8f47`。WSL2 的两项 Rust 单元测试、真实 Bash PTY 回归及三项 Android JVM 测试通过。
 
 荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）在 0.2.1 复现了两个问题。APT 类确认能显示在命令块，输入框却不可编辑。Chromium 拒绝以 tawcroot 的虚拟 root 身份启动，普通用户切换和创建用户命名空间也返回权限错误。修复版把「进程输入」送给当前 PTY。Chromium 可经图形应用列表明确选择兼容模式，该模式关闭 Chromium 自身的沙箱，使用独立配置和 Wayland 软件渲染。
 

@@ -6,7 +6,7 @@ import java.io.IOException
 import java.nio.charset.StandardCharsets.UTF_8
 import org.json.JSONObject
 
-internal const val PROTOCOL_VERSION = 1
+internal const val PROTOCOL_VERSION = 2
 internal const val JSON_FRAME = 0
 internal const val TERMINAL_FRAME = 1
 private const val FRAME_LIMIT = 256 * 1024
