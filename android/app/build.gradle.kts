@@ -22,8 +22,8 @@ android {
         applicationId = "dev.warpterminal.mobile"
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.2.3"
+        versionCode = 6
+        versionName = "0.2.4"
         ndk.abiFilters.add("arm64-v8a")
         buildConfigField("String", "DEBIAN_URL", "\"$debianUrl\"")
         buildConfigField("String", "DEBIAN_SHA256", "\"${revisions.getValue("DEBIAN_SHA256")}\"")

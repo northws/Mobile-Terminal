@@ -87,6 +87,8 @@ class LinuxSessionTest {
             second.use {
                 first.handshake()
                 second.handshake()
+                val searchPath = first.command("printf %s \"\$PATH\"", 0).split(':')
+                assertTrue(searchPath.containsAll(listOf("/home/warp/.local/bin", "/home/warp/.opencode/bin")))
                 assertEquals("你好\n", first.command("printf '你好\\n' | cat", 0))
                 first.command("false", 1)
                 first.command("export WARP_DEVICE_TEST=one", 0)

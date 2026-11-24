@@ -40,6 +40,11 @@ internal sealed interface Installation {
     data object Ready : Installation
 }
 
+internal enum class TerminalProfile(val label: String, val startupCommand: String? = null) {
+    Bash("Bash"),
+    OpenCode("OpenCode", "opencode"),
+}
+
 class TerminalService : Service() {
     internal inner class LocalBinder : Binder() {
         val service get() = this@TerminalService
@@ -82,6 +87,7 @@ class TerminalService : Service() {
         when (intent?.action) {
             INSTALL -> install()
             ADD_TAB -> addTab()
+            ADD_OPENCODE -> addTab(TerminalProfile.OpenCode)
             INSTALL_GRAPHICS -> if (installation == Installation.Ready) graphics.installExamples()
             ADD_GRAPHICS, ADD_COMPATIBLE_CHROMIUM -> if (installation == Installation.Ready) {
                 val id = intent.getStringExtra(APP_ID)
@@ -115,9 +121,9 @@ class TerminalService : Service() {
         }
     }
 
-    private fun addTab() {
+    private fun addTab(profile: TerminalProfile = TerminalProfile.Bash) {
         if (installation != Installation.Ready || tabs.size >= MAX_TABS) return
-        val tab = TerminalTab(nextId++, linux, scope, ::sessionEnded)
+        val tab = TerminalTab(nextId++, linux, scope, profile, ::sessionEnded)
         tabs.add(tab)
         selectTab(tab.id)
         interrupted = false
@@ -216,6 +222,7 @@ class TerminalService : Service() {
     companion object {
         internal const val INSTALL = "install"
         internal const val ADD_TAB = "add_tab"
+        internal const val ADD_OPENCODE = "add_opencode"
         internal const val INSTALL_GRAPHICS = "install_graphics"
         internal const val ADD_GRAPHICS = "add_graphics"
         internal const val ADD_COMPATIBLE_CHROMIUM = "add_compatible_chromium"
@@ -231,8 +238,10 @@ internal class TerminalTab(
     val id: Int,
     private val linux: LinuxEnvironment,
     private val scope: CoroutineScope,
+    private val profile: TerminalProfile = TerminalProfile.Bash,
     private val onExit: () -> Unit,
 ) {
+    val title = "${profile.label} $id"
     private val requests = Channel<Frame>(128)
     private var process: Process? = null
     private var handshake = false
@@ -361,10 +370,15 @@ internal class TerminalTab(
                 replyDraft = ""
             }
             "prompt" -> {
+                val firstPrompt = !handshake
                 handshake = true
                 pendingCommand = null
                 ready = true
                 if (!value.isNull("directory")) directory = value.getString("directory")
+                if (firstPrompt) profile.startupCommand?.let { command ->
+                    draft = command
+                    submit()
+                }
             }
             "screen" -> alternate = value.getBoolean("alternate")
             "exit" -> blocks.lastOrNull()?.takeIf { it.code == null }?.code = value.getInt("code")

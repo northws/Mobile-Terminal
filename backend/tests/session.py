@@ -108,10 +108,17 @@ def main(executable):
             first.send(b"printf '\\033[?1049h\\033[?1049l'\r")
             events = first.until("prompt")
             assert [e["alternate"] for e in events if e["type"] == "screen"] == [True, False], events
+            first.send(b"printf '\\033[?2031h\\033[>0q\\033[6n\\033[?2026$p\\033[?u'; "
+                       b"printf '\\033_Gi=31337,s=1,v=1,a=q,t=d,f=24;AAAA'; sleep 0.1; "
+                       b"printf '\\033\\\\\\033]8;;https://example.invalid\\033\\\\link"
+                       b"\\033]8;;\\033\\\\\\n\\033[?1049h\\033[?1049l'\r")
+            events = first.until("prompt")
+            assert [e["alternate"] for e in events if e["type"] == "screen"] == [True, False], events
+            assert first.command("printf 'BASH_STILL_READY\\n'") == "BASH_STILL_READY\n"
         finally:
             first.close()
             second.close()
-    print("Real Warp Bash PTY, commands, exit status, Ctrl+C, resize, progress edits, alternate screen and independent tabs passed.")
+    print("Bash PTY, exit codes, Ctrl+C, resize, progress, OpenCode startup probes and independent tabs passed.")
 
 
 if __name__ == "__main__":

@@ -33,6 +33,8 @@ fn main() {
 }
 
 fn run() -> io::Result<()> {
+    // The standalone backend keeps Warp's optional terminal features at their defaults.
+    warp_core::features::mark_initialized();
     let mut random = [0; 8];
     File::open("/dev/urandom")?.read_exact(&mut random)?;
     let session = SessionId::from((u64::from_ne_bytes(random) >> 12) + 1);

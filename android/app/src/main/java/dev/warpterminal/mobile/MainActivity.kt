@@ -144,6 +144,8 @@ private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) ->
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text("Bash") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
                             onClick = { menu = false; bash() })
+                        DropdownMenuItem(text = { Text("OpenCode") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
+                            onClick = { menu = false; start(TerminalService.ADD_OPENCODE, null) })
                         DropdownMenuItem(text = { Text("图形应用") },
                             onClick = { menu = false; showApps = true })
                     }
@@ -171,7 +173,7 @@ private fun TerminalHome(service: TerminalService, start: (String, LinuxApp?) ->
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    val labels = service.tabs.map { it.id to if (it.exited) "Bash ${it.id} · 已结束" else "Bash ${it.id}" } +
+                    val labels = service.tabs.map { it.id to if (it.exited) "${it.title} · 已结束" else it.title } +
                         graphics.tabs.map { it.id to it.title }
                     labels.sortedBy { it.first }.forEach { (id, label) ->
                         FilterChip(selected = id == service.selected,

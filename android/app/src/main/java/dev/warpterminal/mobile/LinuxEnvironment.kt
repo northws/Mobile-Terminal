@@ -109,7 +109,10 @@ internal class LinuxEnvironment(private val context: Context) {
         }
     }
 
-    fun spawn(): Process = guest(rootfs, "/opt/warp/warp-android-backend", graphics = true).start()
+    fun spawn(): Process = guest(
+        rootfs, "/usr/bin/env", "WARP_PATH_APPEND=/home/warp/.local/bin:/home/warp/.opencode/bin",
+        "/opt/warp/warp-android-backend", graphics = true,
+    ).start()
 
     suspend fun installGraphics(progress: (String) -> Unit) = withContext(Dispatchers.IO) {
         check(installed())
