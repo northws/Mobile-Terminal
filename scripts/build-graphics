@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+tawc=$1
+assets=$2
+libs=$3
+ndk_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+target=aarch64-linux-android
+patches="$(cd "$(dirname "$0")/../upstream" && pwd)"
+
+cd "$tawc"
+for patch_file in "$patches/tawc-libtool.patch" "$patches/tawc-tabs.patch"; do
+    if ! git apply --reverse --check "$patch_file" 2>/dev/null; then
+        git apply "$patch_file"
+    fi
+done
+case "${4:-all}" in
+    x11)
+        bash scripts/build-xwayland.sh --abi=aarch64
+        exit
+        ;;
+esac
+
+bash scripts/ensure-deps.sh smithay
+bash scripts/ensure-deps.sh --patches rutabaga_gfx deps/rutabaga-patches/rutabaga_gfx
+bash scripts/build-libxkbcommon.sh --abi=aarch64
+rustup target add --toolchain 1.94.0 "$target"
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ndk_bin/${target}29-clang"
+export CC_aarch64_linux_android="$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"
+export AR_aarch64_linux_android="$ndk_bin/llvm-ar"
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
+export CARGO_TARGET_DIR="$PWD/compositor/target"
+cargo +1.94.0 build --manifest-path compositor/Cargo.toml --locked --release --target "$target"
+if [[ "${4:-all}" == compositor ]]; then exit; fi
+
+bash scripts/build-xwayland.sh --abi=aarch64
+x11="$PWD/build/xwayland-aarch64/install"
+mkdir -p "$assets/graphics" "$libs/arm64-v8a"
+cp "compositor/target/$target/release/libcompositor.so" "$libs/arm64-v8a/"
+cp "$x11/bin/Xwayland" "$libs/arm64-v8a/libxwayland.so"
+cp "$x11/bin/xkbcomp" "$libs/arm64-v8a/libxkbcomp.so"
+cp "$x11"/lib/*.so "$libs/arm64-v8a/"
+tar --sort=name --owner=0 --group=0 --numeric-owner -C "$x11" \
+    -cf "$assets/graphics/xkb.tar" share/xkeyboard-config-2
+cp deps/deps.list "$assets/graphics/upstream-dependencies.tsv"
+for source in deps/smithay deps/libxkbcommon deps/xwayland-src/*; do
+    for notice in "$source"/COPYING "$source"/LICENSE{,.txt,.md,-APACHE,-MIT}; do
+        if [[ -f "$notice" ]]; then
+            install -Dm644 "$notice" "$assets/graphics/licenses/${source##*/}/${notice##*/}"
+        fi
+    done
+done

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$root/upstream/revisions.env"
+cache="${WARP_UPSTREAM_DIR:-$root/.upstream}"
+artifacts="${WARP_BUILD_DIR:-$root/build}"
+sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+ndk_version=27.2.12479018
+
+checkout() {
+    local name=$1 url=$2 revision=$3 directory="$cache/$1"
+    if [[ ! -d "$directory/.git" ]]; then
+        git init --quiet "$directory"
+        git -C "$directory" remote add origin "$url"
+        git -C "$directory" fetch --depth 1 origin "$revision"
+        git -C "$directory" checkout --quiet --detach FETCH_HEAD
+    fi
+    if [[ "$(git -C "$directory" rev-parse HEAD)" != "$revision" ]]; then
+        echo "Upstream revision mismatch in $directory. Use a new WARP_UPSTREAM_DIR." >&2
+        exit 1
+    fi
+}
+
+prepare_warp() {
+    checkout warp https://github.com/warpdotdev/warp.git "$WARP_REV"
+    mkdir -p "$cache/warp/crates/warp_android_backend/src"
+    mkdir -p "$cache/warp/crates/warp_android_backend/assets"
+    cp "$root"/backend/Cargo.toml "$cache/warp/crates/warp_android_backend/"
+    cp "$root"/backend/src/*.rs "$cache/warp/crates/warp_android_backend/src/"
+    for asset in bash.sh bash_body.sh bash_init_shell.sh; do
+        tr -d '\r' < "$cache/warp/app/assets/bundled/bootstrap/$asset" > "$cache/warp/crates/warp_android_backend/assets/$asset"
+    done
+}
+
+run_gradle() {
+    if [[ -n "${WARP_GRADLE:-}" ]]; then
+        "$WARP_GRADLE" -p "$root/android" "$@"
+    else
+        bash "$cache/tawc/gradlew" -p "$root/android" "$@"
+    fi
+}
+
+apk_path() {
+    printf '%s\n' "$artifacts/mobile-terminal-arm64-debug.apk"
+}

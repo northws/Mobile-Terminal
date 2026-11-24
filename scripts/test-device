@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+source "$(dirname "$0")/common"
+adb="${WARP_ADB:-${sdk:+$sdk/platform-tools/}adb}"
+abi="$("$adb" shell getprop ro.product.cpu.abi)"
+if [[ "${abi//$'\r'/}" != arm64-v8a ]]; then
+    echo "Connect an authorized ARM64 Android device and select it with ANDROID_SERIAL." >&2
+    exit 1
+fi
+[[ -f "$(apk_path)" ]] || bash "$root/scripts/build-debug"
+checkout tawc https://github.com/wmww/tawc.git "$TAWC_REV"
+checkout termux https://github.com/termux/termux-app.git "$TERMUX_REV"
+export WARP_TERMUX_DIR="$cache/termux"
+export ANDROID_HOME="$sdk"
+run_gradle :app:assembleDebugAndroidTest
+"$adb" shell getprop ro.product.model
+"$adb" shell getprop ro.build.version.release
+"$adb" install -r "$(apk_path)"
+"$adb" install -r -t "$root/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+"$adb" shell am instrument -w -r dev.warpterminal.mobile.test/androidx.test.runner.AndroidJUnitRunner |
+    tee "$artifacts/device-test.txt"
+grep -q 'OK (' "$artifacts/device-test.txt"

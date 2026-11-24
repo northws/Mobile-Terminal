@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+source "$(dirname "$0")/common"
+bash "$root/scripts/doctor"
+prepare_warp
+checkout tawc https://github.com/wmww/tawc.git "$TAWC_REV"
+checkout termux https://github.com/termux/termux-app.git "$TERMUX_REV"
+
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$artifacts/cargo}"
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+export PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu="${PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu:-/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig}"
+export PKG_CONFIG_ALLOW_CROSS_aarch64_unknown_linux_gnu=1
+export OPENSSL_STATIC=1
+target=aarch64-unknown-linux-gnu
+(
+    cd "$cache/warp"
+    rustup target add "$target"
+    cargo build -p warp_android_backend --target "$target"
+)
+export ANDROID_HOME="$sdk" ANDROID_NDK_HOME="$sdk/ndk/$ndk_version"
+bash "$cache/tawc/tawcroot/build.sh" --abi=aarch64
+
+export WARP_TERMUX_DIR="$cache/termux"
+export WARP_TAWC_DIR="$cache/tawc"
+export WARP_ANDROID_ASSETS="$artifacts/android-assets"
+export WARP_ANDROID_LIBS="$artifacts/android-libs"
+mkdir -p "$WARP_ANDROID_ASSETS/generated" "$WARP_ANDROID_LIBS/arm64-v8a"
+bash "$root/scripts/build-graphics" "$cache/tawc" "$WARP_ANDROID_ASSETS" "$WARP_ANDROID_LIBS"
+aarch64-linux-gnu-strip --strip-unneeded \
+    -o "$WARP_ANDROID_ASSETS/generated/warp-android-backend" \
+    "$CARGO_TARGET_DIR/$target/debug/warp-android-backend"
+cp "$cache/tawc/app/src/main/jniLibs/arm64-v8a/libtawcroot.so" "$WARP_ANDROID_LIBS/arm64-v8a/"
+cp "$cache/warp/LICENSE-AGPL" "$WARP_ANDROID_ASSETS/generated/Warp-LICENSE-AGPL"
+cp "$cache/warp/LICENSE-MIT" "$WARP_ANDROID_ASSETS/generated/Warp-LICENSE-MIT"
+cp "$cache/warp/crates/warp_terminal/src/model/LICENSE-ALACRITTY" "$WARP_ANDROID_ASSETS/generated/LICENSE-APACHE"
+cp "$cache/tawc/LICENSE.MIT" "$WARP_ANDROID_ASSETS/generated/TAWC-LICENSE-MIT"
+cp "$cache/termux/LICENSE.md" "$WARP_ANDROID_ASSETS/generated/Termux-LICENSE"
+cp "$root/upstream/revisions.env" "$WARP_ANDROID_ASSETS/generated/upstream.txt"
+run_gradle :app:assembleDebug
+apk="$(apk_path)"
+cp "$root/android/app/build/outputs/apk/debug/app-debug.apk" "$apk"
+"$sdk/build-tools/36.0.0/apksigner" verify --verbose "$apk"
+(cd "$artifacts" && sha256sum "${apk##*/}" > "${apk##*/}.sha256")
+echo "$apk"

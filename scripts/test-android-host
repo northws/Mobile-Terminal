@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+source "$(dirname "$0")/common"
+if [[ -z "$sdk" || ! -f "$sdk/platforms/android-36/android.jar" ]]; then
+    echo "Android unit tests require Android SDK 36 (ANDROID_SDK_ROOT)." >&2
+    exit 1
+fi
+checkout tawc https://github.com/wmww/tawc.git "$TAWC_REV"
+checkout termux https://github.com/termux/termux-app.git "$TERMUX_REV"
+export WARP_TERMUX_DIR="$cache/termux"
+export WARP_TAWC_DIR="$cache/tawc"
+export ANDROID_HOME="$sdk"
+run_gradle :app:testDebugUnitTest

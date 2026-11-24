@@ -1,0 +1,109 @@
+--- a/compositor/src/host.rs
++++ b/compositor/src/host.rs
+@@ -192,6 +192,7 @@
+     FullscreenChanged { activity_id: ActivityId, fullscreen: bool },
+     /// Android Back was pressed while this host's Activity was active.
+     BackPressed { activity_id: ActivityId },
++    RequestWindowClose { activity_id: ActivityId },
+     /// Hardware key event from this host's Activity. The keycode is already
+     /// translated to Linux evdev form by the JNI entry point.
+     HardwareKey {
+--- a/compositor/src/event_loop.rs
++++ b/compositor/src/event_loop.rs
+@@ -1581,6 +1581,9 @@
+             data.set_host_fullscreen(&activity_id, fullscreen);
+             data.needs_render = true;
+         }
++        SurfaceEvent::RequestWindowClose { activity_id } => {
++            data.request_close_windows_for_host(&activity_id);
++        }
+         SurfaceEvent::BackPressed { activity_id } => {
+             handle_back_pressed(data, &activity_id);
+         }
+--- a/compositor/src/lib.rs
++++ b/compositor/src/lib.rs
+@@ -1022,6 +1022,29 @@
+     }
+ }
+ 
++#[unsafe(no_mangle)]
++pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeScanWarpApplications(
++    mut env: JNIEnv,
++    _class: JClass,
++    root: JString,
++    home: JString,
++) -> jobject {
++    let Ok(root) = env.get_string(&root).map(String::from) else { return std::ptr::null_mut() };
++    let Ok(home) = env.get_string(&home).map(String::from) else { return std::ptr::null_mut() };
++    let json = launcher::scan_warp_json(std::path::Path::new(&root), std::path::Path::new(&home));
++    env.new_string(json).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
++}
++
++#[unsafe(no_mangle)]
++pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeRequestWindowClose(
++    mut env: JNIEnv,
++    _class: JClass,
++    activity_id: JString,
++) {
++    let activity_id = jstring_to_id(&mut env, activity_id);
++    host::send_surface_event(SurfaceEvent::RequestWindowClose { activity_id });
++}
++
+ /// Resolve one `Icon=` value against a rootfs, as the launcher scan
+ /// would: a PNG path, or empty. Pure file I/O; call off the UI thread.
+ #[unsafe(no_mangle)]
+--- a/compositor/src/launcher.rs
++++ b/compositor/src/launcher.rs
+@@ -324,12 +324,24 @@
+ /// (the launcher list); metadata resolution keeps them — a *running*
+ /// NoDisplay app still needs its icon/title resolved.
+ fn scan_entries(rootfs: &Path, launchable_only: bool) -> Vec<Entry> {
++    scan_entries_with_home(rootfs, launchable_only, None)
++}
++
++fn scan_entries_with_home(rootfs: &Path, launchable_only: bool, home: Option<&Path>) -> Vec<Entry> {
+     // Canonical, so reported paths use `/data/data/<pkg>` (see
+     // [IconResolver::new]) and guest symlinks resolve against it.
+     let rootfs = rootfs.canonicalize().unwrap_or_else(|_| rootfs.to_path_buf());
+     let mut entries: Vec<Entry> = Vec::new();
+     let locales = current_locales();
+-    for (path, real) in desktop_files(&rootfs) {
++    let mut files = Vec::new();
++    if let Some(home) = home.and_then(|path| path.canonicalize().ok()) {
++        let dir = home.join(".local/share/applications");
++        if let Some(real) = resolve_in_rootfs(&home, &dir) {
++            walk_desktop_dir(&home, &dir, &real, &mut HashSet::new(), &mut files);
++        }
++    }
++    files.extend(desktop_files(&rootfs));
++    for (path, real) in files {
+         let Ok(text) = std::fs::read_to_string(&real) else { continue };
+         // Parse under the walked path, not the target: the desktop id
+         // comes from the name under `applications/`.
+@@ -392,7 +404,9 @@
+         }
+     }
+     let mut entries = kept;
+-    merge_store(&mut entries, &Store::load(&rootfs));
++    if home.is_none() {
++        merge_store(&mut entries, &Store::load(&rootfs));
++    }
+     entries.sort_by(|a, b| {
+         a.name
+             .to_lowercase()
+@@ -483,6 +497,15 @@
+ /// This is where icons get resolved for the launcher list — Kotlin calls
+ /// it on `Dispatchers.IO`, so the per-entry stat walk is off the
+ /// compositor and UI threads.
++pub fn scan_warp_json(rootfs: &Path, home: &Path) -> String {
++    let entries: Vec<_> = scan_entries_with_home(rootfs, true, Some(home))
++        .into_iter()
++        .filter(|entry| !entry.terminal)
++        .map(|entry| json!({ "id": entry.id, "name": entry.name, "path": entry.path }))
++        .collect();
++    serde_json::Value::Array(entries).to_string()
++}
++
+ pub fn scan_json(rootfs: &Path) -> String {
+     let entries = scan_entries(rootfs, true);
+     let icons = IconResolver::new(rootfs);

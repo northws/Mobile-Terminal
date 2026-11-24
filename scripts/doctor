@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+source "$(dirname "$0")/common"
+missing=0
+require() {
+    if ! command -v "$1" >/dev/null; then
+        echo "Missing build command $1"
+        missing=1
+    fi
+}
+[[ "$(uname -s)/$(uname -m)" == Linux/x86_64 ]] || { echo "Build host must be Linux x86_64."; missing=1; }
+for tool in git java cargo rustup aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ aarch64-linux-gnu-strip \
+    make pkg-config python3 meson ninja autoreconf libtool bison flex gperf; do
+    require "$tool"
+done
+if ! java -version 2>&1 | grep -q 'version "21\.'; then
+    echo "JDK 21 required"
+    missing=1
+fi
+for path in "platforms/android-36/android.jar" "ndk/$ndk_version/source.properties" "build-tools/36.0.0/apksigner"; do
+    if [[ -z "$sdk" || ! -f "$sdk/$path" ]]; then
+        echo "Missing Android SDK file $path"
+        missing=1
+    fi
+done
+if (( missing == 0 )); then echo 'Build prerequisites available'; fi
+adb="${WARP_ADB:-${sdk:+$sdk/platform-tools/}adb}"
+if command -v "$adb" >/dev/null && abi=$("$adb" shell getprop ro.product.cpu.abi 2>/dev/null) && [[ "${abi//$'\r'/}" == arm64-v8a ]]; then
+    echo 'ARM64 Android device connected'
+else
+    echo 'ARM64 Android device unavailable'
+fi
+exit "$missing"

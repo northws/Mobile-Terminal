@@ -1,0 +1,9 @@
+.upstream/
+.toolchain/
+build/
+target/
+.gradle/
+.kotlin/
+local.properties
+android/app/src/main/assets/generated/
+android/app/src/main/jniLibs/

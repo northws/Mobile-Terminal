@@ -1,0 +1,13 @@
+--- a/scripts/build-xwayland.sh
++++ b/scripts/build-xwayland.sh
+@@ -388,6 +388,10 @@
+ stage_libffi() {
+     stage_should_run libffi || return 0
+     clone_pinned libffi
++    # Libtool 2.5 no longer ships LT_SYS_SYMBOL_USCORE. Bionic's ELF ABI
++    # uses undecorated C symbols, regardless of the build host's Libtool.
++    sed -i 's/^LT_SYS_SYMBOL_USCORE$/sys_symbol_underscore=no/' \
++        "$SRC_ROOT/libffi/configure.ac"
+     build_autotools libffi \
+         --disable-multi-os-directory \
+         --disable-docs

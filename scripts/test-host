@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+source "$(dirname "$0")/common"
+prepare_warp
+export CARGO_TARGET_DIR="$artifacts/cargo"
+(
+    cd "$cache/warp"
+    cargo test -p warp_android_backend
+    cargo build -p warp_android_backend
+)
+python3 "$root/backend/tests/session.py" "$CARGO_TARGET_DIR/debug/warp-android-backend"
+if [[ "${1:-}" != --backend-only ]]; then
+    bash "$root/scripts/test-android-host"
+fi
