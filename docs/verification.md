@@ -1,5 +1,20 @@
 # Mobile Terminal 验证记录
 
+## 0.2.7 Adreno 图形加速
+
+2026-11-24 使用 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00、ARM64、Android 17、Adreno 840）验证。安装包为 Mobile Terminal 0.2.7（versionCode 9、minSdk 29），通过 APK v2 签名校验。APK 大小 45,171,789 字节，SHA-256 为 `55182ded4b0dcfea330906992719146b452b5c35956c60add71bac580cca5767`。
+
+| 项目 | ARM64 真机结果 |
+|---|---|
+| Wayland EGL/GLES | 自动检测通过。Debian 客户端报告 `GL_VENDOR=Qualcomm` 和 `GL_RENDERER=Adreno (TM) 840`，像素读回正确，TAWC 的硬件缓冲区纹理导入计数增长。从新 Bash 打开的图形标签连续绘制 560 帧，两张截图中的红条位置不同。 |
+| X11 EGL/GLES | 独立检测通过。通过 XWayland 提交 Android 硬件缓冲区，客户端报告同一渲染器。从 Bash 通过 X11 包装器启动后，在图形标签中连续绘制 560 帧并观察到红条移动。 |
+| Chromium WebGL | Debian Chromium `156.0.8078.108-1~deb13u1` 的 Wayland GPU 进程报告 `EGL_NOT_INITIALIZED`。本地测试页未能建立 WebGL 上下文，`chrome://gpu` 显示 WebGL 关闭，页面合成使用软件。兼容启动自动使用软件路径。手动选择「软件启动」也能在图形标签打开 `about:blank`。[TAWC 上游的 Chromium/Electron EGL 相关问题](https://github.com/wmww/tawc/issues/1) |
+| 软件回退 | 手动选择「软件」后，新 Bash 的 `LIBGL_ALWAYS_SOFTWARE=1`。xeyes 和 Mousepad 均能显示。另用设备测试模拟 X11 检测失败和 Chromium 升级，验证各路径独立回退。 |
+| 图形标签恢复 | Mousepad 的未保存测试文本在 2136×3200 竖屏切换到 3200×2136 横屏后仍在。切到 Bash 再返回、打开 Android 设置再返回，编辑区文本和光标都保留。 |
+| 覆盖安装与离线 | 覆盖安装前后，主目录测试文件的 SHA-256 均为 `5e4a6713ee2ab7471c64b3460031b2c2d9faf599006d2bd89bec0eacea594124`。启用飞行模式并关闭 Wi-Fi 后冷启动，Wayland 和 X11 各完成 48 帧并报告 Adreno 840。 |
+
+Linux 主机按 `scripts/build-debug` 构建。两项 Rust 单元测试、Bash PTY 字节流回放和五项 Android JVM 测试通过。六项 USB 真机 instrumentation 测试通过，原始结果在本次交付的 `build/adreno-device-test.txt`。
+
 ## 0.2.6 APT 安装进度
 
 0.2.5 将 APT 保留在屏幕底行的安装进度写入了命令块，导致进度和软件包日志挤在同一行。旧后端使用分片回放稳定复现。修复后的两项 Rust 单元测试及 Bash PTY 回归通过。分片回放覆盖光标保存、底行定位、两次重绘和清除，并检查解包、配置日志各自完整。

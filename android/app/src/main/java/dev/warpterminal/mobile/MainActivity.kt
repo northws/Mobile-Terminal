@@ -141,10 +141,11 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
             .putExtra(TerminalService.APP_NAME, app.name)
             .putExtra(TerminalService.APP_COMMAND, app.command))
     }
-    fun openGraphics(action: String, app: LinuxApp) = start(Intent(action)
+    fun openGraphics(action: String, app: LinuxApp, software: Boolean = false) = start(Intent(action)
         .putExtra(TerminalService.APP_ID, app.id)
         .putExtra(TerminalService.APP_NAME, app.name)
-        .putExtra(TerminalService.APP_FILE, app.desktopFile))
+        .putExtra(TerminalService.APP_FILE, app.desktopFile)
+        .putExtra(TerminalService.SOFTWARE_GRAPHICS, software))
     Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -255,7 +256,15 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
                     openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app)
                 }) { Text("兼容启动") }
             },
-            dismissButton = { TextButton(onClick = { confirmChromium = null }) { Text("取消") } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { confirmChromium = null }) { Text("取消") }
+                    TextButton(onClick = {
+                        confirmChromium = null
+                        openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, software = true)
+                    }) { Text("软件启动") }
+                }
+            },
         )
     }
 }
@@ -285,6 +294,7 @@ private fun GraphicsPicker(graphics: GraphicsSessions, close: () -> Unit, instal
     var apps by remember { mutableStateOf<List<LinuxApp>?>(null) }
     var scanError by remember { mutableStateOf(false) }
     LaunchedEffect(graphics.installRevision) {
+        graphics.detectGraphics(includeChromium = true)
         scanError = false
         try {
             apps = graphics.apps()
@@ -301,11 +311,38 @@ private fun GraphicsPicker(graphics: GraphicsSessions, close: () -> Unit, instal
         title = { Text("图形应用") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val gpu = graphics.acceleration
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("图形渲染", Modifier.weight(1f))
+                    TextButton(onClick = { graphics.setAutomaticGraphics(true) }, enabled = !gpu.automatic) {
+                        Text("自动")
+                    }
+                    TextButton(onClick = { graphics.setAutomaticGraphics(false) }, enabled = gpu.automatic) {
+                        Text("软件")
+                    }
+                }
+                if (gpu.automatic && gpu.potentialAdreno) {
+                    for (path in GpuPath.entries) {
+                        val result = gpu.result(path)
+                        if (result != null || gpu.running == path) {
+                            val mode = when {
+                                gpu.running == path -> "正在检测"
+                                result?.hardware == true -> result.detail
+                                else -> "软件渲染（${result?.detail.orEmpty()}）"
+                            }
+                            Text("${path.label} · $mode", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    TextButton(onClick = { graphics.detectGraphics(includeChromium = true, retry = true) },
+                        enabled = gpu.running == null) { Text("重新检测") }
+                } else {
+                    Text("新启动的程序使用软件渲染", style = MaterialTheme.typography.bodySmall)
+                }
                 when {
                     scanError -> Text("无法读取已安装的图形应用")
                     apps == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
                     apps?.isEmpty() == true -> Text("Debian 中还没有图形应用。")
-                    else -> LazyColumn(Modifier.heightIn(max = 300.dp)) {
+                    else -> LazyColumn(Modifier.weight(1f, fill = false).heightIn(max = 300.dp)) {
                         items(apps.orEmpty(), key = LinuxApp::id) { app ->
                             TextButton(onClick = { open(app) }, modifier = Modifier.fillMaxWidth()) { Text(app.name) }
                         }

@@ -13,7 +13,9 @@ Mobile Terminal 是一款 Android 原生终端。它在手机本地运行 Debian
 - 图形标签中的「键盘」手动打开 Android 输入法。「关闭标签」请求程序关闭窗口。若应用有未保存内容，可在其对话框中保存或取消。
 - **运行**执行输入框中的命令。APT 等程序等待确认时，在「进程输入」中输入回复再点「发送」。留空发送等同按回车。命令块可以复制命令或输出。
 - 普通进度更新会覆盖当前行。APT 的安装进度在命令输出下方单独刷新，解包和配置日志保留在命令块中。命令块默认跟随最新输出，回看旧内容时会暂停跟随，点「回到最新」可恢复。
-- Debian 已安装 Chromium 时，可从「图形应用 → Chromium → 兼容启动」打开。兼容模式使用软件渲染和独立配置，并关闭 Chromium 自身的沙箱。请只打开可信页面。
+- 「图形应用 → 图形渲染」默认使用「自动」。Adreno 设备会分别检测 Wayland、X11 和已安装的 Chromium，列表显示实际渲染器或回退原因。「软件」会让新启动的程序使用软件渲染。已有窗口保留运行状态。旧版 Debian 若缺少图形依赖，可联网安装示例应用后点「重新检测」。
+- 新建 Bash 会继承检测通过的 Wayland EGL/GLES 环境。X11 加速可用时，可在 Bash 运行 `/usr/lib/hybris/warp-x11-egl 程序名`。如果 Wayland 加速也已启用，可以用 `HYBRIS_EGLPLATFORM=x11 程序名`。通过检测后可以离线运行。
+- Debian 已安装 Chromium 时，可从「图形应用 → Chromium → 兼容启动」打开。硬件 WebGL 需要通过独立的像素读回测试。也可在确认框选择「软件启动」。兼容启动使用独立的浏览器配置，并关闭 Chromium 自身的沙箱。请只打开可信页面。
 - Bash 页的**终端**可手动打开 VT 网格。运行中的程序也可用此按钮打开终端应用标签。点按网格可以使用输入法。
 - **文件**可导入至 `~/Downloads`，或从主目录导出至系统文件选择器指定的位置。
 
@@ -28,7 +30,9 @@ sudo apt-get install git curl unzip file make build-essential pkg-config python3
     openjdk-21-jdk-headless g++-aarch64-linux-gnu libc6-dev-arm64-cross \
     libfontconfig-dev libfontconfig-dev:arm64 libssl-dev libssl-dev:arm64 \
     meson ninja-build autoconf automake libtool libtool-bin bison flex gperf \
-    gettext libexpat1-dev libxml2-dev xsltproc xz-utils
+    gettext libexpat1-dev libxml2-dev xsltproc xz-utils \
+    patchelf libvulkan-dev libwayland-dev libwayland-bin wayland-protocols \
+    libx11-xcb-dev libegl-dev:arm64 libgles-dev:arm64 libwayland-dev:arm64 libx11-dev:arm64
 ```
 
 通过 rustup 安装 Rust 1.94.0 及 `aarch64-unknown-linux-gnu`、`aarch64-linux-android` 目标。通过 Android SDK Manager 安装 `platforms;android-36`、`build-tools;36.0.0`、`ndk;27.2.12479018` 和 `platform-tools`。将 `ANDROID_SDK_ROOT` 指向 SDK。TAWC 的构建包装器使用 Gradle 8.12，已有同版本 Gradle 时可设置 `WARP_GRADLE` 为其绝对路径。

@@ -33,6 +33,9 @@ internal class LinuxEnvironment(private val context: Context) {
     private val tawcroot = File(context.applicationInfo.nativeLibraryDir, "libtawcroot.so")
     internal val desktopRoot get() = rootfs
     internal val graphicsShare = File(context.applicationInfo.dataDir, "share")
+    internal val hybris = File(context.filesDir, "graphics-hybris")
+    internal val acceleration = GraphicsAcceleration(context)
+    internal val chromiumBinary get() = File(rootfs, "usr/lib/chromium/chromium")
 
     fun installed(): Boolean = marker.isFile && File(rootfs, "usr/bin/bash").isFile
 
@@ -80,7 +83,8 @@ internal class LinuxEnvironment(private val context: Context) {
         runStep(guest(candidate, "/usr/bin/apt-get", "update"), "更新 Debian 软件包索引")
         runStep(
             guest(candidate, "/usr/bin/apt-get", "-y", "--no-install-recommends",
-                "install", "vim", "less", "ca-certificates", "libfontconfig1", "libfreetype6"),
+                "install", "vim", "less", "ca-certificates", "libfontconfig1", "libfreetype6",
+                "libwayland-client0", "libwayland-egl1", "libwayland-server0", "libx11-6", "libx11-xcb1"),
             "安装 Debian 软件包",
         )
         progress("正在检查 Bash 和 Warp 命令块", null)
@@ -111,7 +115,7 @@ internal class LinuxEnvironment(private val context: Context) {
 
     fun spawn(): Process = guest(
         rootfs, "/usr/bin/env", "WARP_PATH_APPEND=/home/warp/.local/bin:/home/warp/.opencode/bin",
-        "/opt/warp/warp-android-backend", graphics = true,
+        "/opt/warp/warp-android-backend", graphics = true, allowX11Override = true,
     ).start()
 
     suspend fun installGraphics(progress: (String) -> Unit) = withContext(Dispatchers.IO) {
@@ -122,22 +126,24 @@ internal class LinuxEnvironment(private val context: Context) {
         progress("正在安装 Mousepad、xeyes 和中文字体")
         runStep(
             guest(rootfs, "/usr/bin/apt-get", "-y", "--no-install-recommends", "install",
-                "libglib2.0-bin", "mousepad", "x11-apps", "fonts-noto-cjk"),
+                "libglib2.0-bin", "mousepad", "x11-apps", "fonts-noto-cjk", "libwayland-egl1",
+                "libwayland-server0", "libx11-xcb1"),
             "安装图形示例软件",
         )
     }
 
-    fun launchGraphics(app: LinuxApp, token: String, chromiumCompatibility: Boolean): Process {
+    fun launchGraphics(app: LinuxApp, token: String, chromiumCompatibility: Boolean, software: Boolean): Process {
+        val useChromiumGpu = chromiumCompatibility && !software && acceleration.chromiumReady(chromiumBinary)
+        val backend = when {
+            chromiumCompatibility -> if (useChromiumGpu) GpuPath.WAYLAND else null
+            app.desktopFile == null -> acceleration.backend(GpuPath.X11)
+            else -> acceleration.backend(GpuPath.WAYLAND)
+        }
         val command = when {
             chromiumCompatibility -> {
                 check(app.isDebianChromium)
                 if (!File(rootfs, "usr/bin/chromium").canExecute()) throw IOException("Debian 中尚未安装 Chromium")
-                arrayOf(
-                    "/usr/bin/chromium", "--no-sandbox", "--ozone-platform=wayland", "--disable-gpu",
-                    "--no-first-run", "--no-default-browser-check",
-                    "--user-data-dir=/home/warp/.local/share/mobile-terminal/chromium",
-                    "about:blank",
-                )
+                chromiumCommand(useChromiumGpu, "/home/warp/.local/share/mobile-terminal/chromium", "about:blank")
             }
             app.desktopFile != null -> {
                 if (!File(rootfs, "usr/bin/gio").canExecute()) {
@@ -148,12 +154,58 @@ internal class LinuxEnvironment(private val context: Context) {
             else -> arrayOf("/usr/bin/xeyes")
         }
         return guest(rootfs, "/bin/bash", "-c", "cd \"\$HOME\" && exec \"\$@\"", "warp-launch",
-            *command, graphics = true, activation = token)
+            *command, graphics = true, activation = token, backend = backend)
             .redirectOutput(File("/dev/null")).redirectError(File("/dev/null"))
             .start().also { it.outputStream.close() }
     }
 
-    private fun guest(root: File, vararg command: String, graphics: Boolean = false, activation: String? = null): ProcessBuilder {
+    fun probeGraphics(path: GpuPath, token: String, profile: File?, output: File): Process {
+        val command = if (profile == null) arrayOf("/usr/lib/hybris/adreno-probe", path.platform) else
+            chromiumCommand(true, "/tmp/${profile.name}", "file:///usr/lib/hybris/webgl.html") +
+                arrayOf("--class=mobile-terminal-webgl-probe", "--disable-background-networking")
+        return guest(rootfs, *command, graphics = true, activation = token, backend = path)
+            .redirectErrorStream(true).redirectOutput(output).start().also { it.outputStream.close() }
+    }
+
+    fun probeDirectory(): File = java.nio.file.Files.createTempDirectory(
+        File(rootfs, "tmp").toPath(), "mobile-terminal-gpu-",
+    ).toFile()
+
+    @Synchronized
+    fun prepareGpuLinker() {
+        // TAWC's libhybris fork reads this exact guest path. Android 10
+        // has no generated file and libhybris supplies its own defaults.
+        val source = File("/linkerconfig/ld.config.txt")
+        if (!source.isFile || source.length() == 0L) return
+        val directory = File(rootfs, "usr/lib/hybris-config")
+        checkDirectory(directory)
+        val target = File(directory, source.name)
+        if (target.length() == source.length() && target.lastModified() == source.lastModified()) return
+        val temp = File.createTempFile("linker-", ".tmp", directory)
+        try {
+            source.copyTo(temp, overwrite = true)
+            Os.chmod(temp.path, 420)
+            temp.setLastModified(source.lastModified())
+            Os.rename(temp.path, target.path)
+        } finally {
+            temp.delete()
+        }
+    }
+
+    private fun chromiumCommand(hardware: Boolean, profile: String, page: String): Array<String> =
+        arrayOf("/usr/bin/chromium", "--no-sandbox", "--ozone-platform=wayland",
+            "--no-first-run", "--no-default-browser-check", "--user-data-dir=$profile") +
+            (if (hardware) arrayOf("--use-gl=angle", "--use-angle=gles", "--disable-software-rasterizer")
+            else arrayOf("--disable-gpu")) + page
+
+    private fun guest(
+        root: File,
+        vararg command: String,
+        graphics: Boolean = false,
+        activation: String? = null,
+        backend: GpuPath? = acceleration.backend(GpuPath.WAYLAND),
+        allowX11Override: Boolean = false,
+    ): ProcessBuilder {
         val args = mutableListOf(tawcroot.path, "-s", "-r", root.path)
         for (bind in listOf("/dev:/dev", "/proc:/proc", "/sys:/sys", "${home.path}:/home/warp", "${runnerDir.path}:/opt/warp:ro")) {
             args.addAll(listOf("-b", bind))
@@ -165,12 +217,26 @@ internal class LinuxEnvironment(private val context: Context) {
             checkDirectory(File(root, "tmp/.X11-unix"))
             args.addAll(listOf("-b", "${graphicsShare.path}:/usr/share/warp-display",
                 "-b", "${x11.path}:/tmp/.X11-unix"))
+            if (backend != null || (allowX11Override && acceleration.backend(GpuPath.X11) != null)) {
+                for (partition in listOf("/apex", "/vendor", "/system", "/system_ext")) {
+                    if (File(partition).isDirectory) args.addAll(listOf("-b", "$partition:$partition:ro"))
+                }
+                args.addAll(listOf("-b", "${hybris.path}:/usr/lib/hybris:ro"))
+            }
         }
         args.addAll(listOf("--", "/usr/bin/env", "-i", "HOME=/home/warp", "USER=warp",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games",
             "LANG=C.UTF-8", "TMPDIR=/tmp", "DEBIAN_FRONTEND=noninteractive"))
-        if (display) args.addAll(listOf("WAYLAND_DISPLAY=wayland-0", "DISPLAY=:0",
-            "XDG_RUNTIME_DIR=/usr/share/warp-display", "LIBGL_ALWAYS_SOFTWARE=1"))
+        if (display) {
+            args.addAll(listOf("WAYLAND_DISPLAY=wayland-0", "DISPLAY=:0",
+                "XDG_RUNTIME_DIR=/usr/share/warp-display", "XDG_SESSION_TYPE=wayland"))
+            if (backend == null) args.add("LIBGL_ALWAYS_SOFTWARE=1")
+            else args.addAll(listOf(
+                "LD_LIBRARY_PATH=/usr/lib/hybris/gl-shims:/usr/lib/hybris",
+                "HYBRIS_EGLPLATFORM=${backend.platform}",
+                "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/lib/hybris/10-mobile-terminal.json",
+            ))
+        }
         if (activation != null) args.addAll(listOf("XDG_ACTIVATION_TOKEN=$activation", "DESKTOP_STARTUP_ID=$activation"))
         args.addAll(command)
         return ProcessBuilder(args).directory(File(root, "tmp")).apply {

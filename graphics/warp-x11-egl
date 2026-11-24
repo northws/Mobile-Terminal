@@ -1,0 +1,5 @@
+#!/bin/sh
+exec env -u LIBGL_ALWAYS_SOFTWARE \
+    LD_LIBRARY_PATH=/usr/lib/hybris/gl-shims:/usr/lib/hybris \
+    HYBRIS_EGLPLATFORM=x11 \
+    __EGL_VENDOR_LIBRARY_FILENAMES=/usr/lib/hybris/10-mobile-terminal.json "$@"

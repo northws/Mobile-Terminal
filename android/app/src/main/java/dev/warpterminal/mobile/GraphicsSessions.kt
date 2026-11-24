@@ -1,8 +1,14 @@
 package dev.warpterminal.mobile
 
 import android.content.Context
+import android.graphics.PixelFormat
+import android.media.Image
+import android.media.ImageReader
+import android.os.Handler
+import android.os.Looper
 import android.system.Os
 import android.system.OsConstants
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -15,12 +21,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import me.phie.tawc.compositor.NativeBridge
 import org.json.JSONArray
 
@@ -55,7 +63,20 @@ internal class GraphicsSessions(
     private val titles = mutableMapOf<String, String>()
     private var prepared = false
     private var compositorStarted = false
+    val acceleration get() = linux.acceleration
+    private var gpuCheck: Job? = null
+    private var checkChromium = false
+    private var probe: ProbeWindow? = null
     val activeCount get() = tabs.count { it.error == null }
+
+    private class ProbeWindow(val id: String) {
+        var firstFrame = false
+        var title = ""
+        var webGlPixels = false
+
+        fun webGlFinished() = firstFrame &&
+            (title.contains("WebGL FAIL ") || (webGlPixels && title.isNotEmpty()))
+    }
 
     suspend fun prepare() = preparation.withLock {
         if (prepared) return@withLock
@@ -155,7 +176,169 @@ internal class GraphicsSessions(
         }
     }
 
-    fun launchApp(app: LinuxApp, chromiumCompatibility: Boolean) {
+    fun setAutomaticGraphics(enabled: Boolean) {
+        acceleration.setAutomaticMode(enabled)
+        if (enabled) detectGraphics(includeChromium = true) else gpuCheck?.cancel()
+    }
+
+    fun detectGraphics(includeChromium: Boolean, retry: Boolean = false): Job? {
+        if (!acceleration.automatic || !acceleration.potentialAdreno) return null
+        gpuCheck?.takeIf { it.isActive }?.let {
+            checkChromium = checkChromium || includeChromium
+            return it
+        }
+        val previous = gpuCheck
+        checkChromium = includeChromium
+        return scope.launch {
+            previous?.join()
+            if (!acceleration.automatic) return@launch
+            acceleration.checkChromiumVersion(linux.chromiumBinary)
+            for (path in GpuPath.entries) {
+                if (path == GpuPath.CHROMIUM && (!checkChromium || !linux.chromiumBinary.canExecute())) continue
+                if (!retry && acceleration.result(path) != null) continue
+                if (path == GpuPath.CHROMIUM && acceleration.result(GpuPath.WAYLAND)?.hardware != true) {
+                    acceleration.record(path, GpuResult(false, "需要通过 Wayland EGL 检测"))
+                    continue
+                }
+                acceleration.running = path
+                try {
+                    prepare()
+                    withContext(Dispatchers.IO) {
+                        acceleration.prepareAssets(linux.hybris)
+                        linux.prepareGpuLinker()
+                    }
+                    activate()
+                    val result = checkGpu(path)
+                    Log.i("WarpGraphics", "${path.label}: ${result.detail}")
+                    acceleration.record(path, result)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    Log.w("WarpGraphics", "${path.label} probe failed", error)
+                    acceleration.record(path, GpuResult(false, "无法准备 GPU 组件"))
+                } catch (_: LinkageError) {
+                    acceleration.record(path, GpuResult(false, "图形组件加载失败"))
+                } finally {
+                    acceleration.running = null
+                }
+            }
+        }.also { gpuCheck = it }
+    }
+
+    private suspend fun checkGpu(path: GpuPath): GpuResult {
+        val chromium = path == GpuPath.CHROMIUM
+        val id = UUID.randomUUID().toString()
+        val window = ProbeWindow(id)
+        val appId = if (chromium) "mobile-terminal-webgl-probe" else "mobile-terminal-egl-probe"
+        var directory: File? = null
+        var process: Process? = null
+        val reader = ImageReader.newInstance(768, 512, PixelFormat.RGBA_8888, 3)
+        probe = window
+        try {
+            val token = withContext(Dispatchers.IO) { NativeBridge.nativeReserveLaunchHost(id, appId, -1) }
+                ?: return GpuResult(false, "合成器未响应")
+            reader.setOnImageAvailableListener({ receiver ->
+                receiver.acquireLatestImage()?.use { frame ->
+                    if (chromium && !window.webGlPixels) window.webGlPixels = hasRedCanvas(frame)
+                }
+            },
+                Handler(Looper.getMainLooper()))
+            NativeBridge.nativeRegisterActivitySurface(id, reader.surface, reader.width, reader.height)
+            NativeBridge.nativeOnActivityFocusChanged(id, true)
+            val before = withContext(Dispatchers.IO) { hardwareImports() }
+            val workspace = withContext(Dispatchers.IO) { linux.probeDirectory().also { directory = it } }
+            val output = File(workspace, "probe.log")
+            withContext(Dispatchers.IO) {
+                process = linux.probeGraphics(if (chromium) GpuPath.WAYLAND else path, token,
+                    workspace.takeIf { chromium }, output)
+            }
+            val guest = checkNotNull(process)
+            val completed = withTimeoutOrNull(if (chromium) 18000L else 10000L) {
+                while (guest.isAlive && !(chromium && window.webGlFinished())) delay(60)
+                true
+            } ?: false
+            if (!completed) return GpuResult(false, if (chromium) "等待 WebGL 结果超时" else "EGL 绘制超时")
+            if (chromium) {
+                val renderer = window.title.substringAfter("Mobile Terminal WebGL OK ", "")
+                    .substringBeforeLast(" - Chromium").take(160)
+                return when {
+                    window.firstFrame && window.webGlPixels && renderer.contains("Adreno", ignoreCase = true) ->
+                        GpuResult(true, renderer)
+                    window.title.contains("WebGL FAIL WebGL unavailable") -> GpuResult(false, "无法建立 WebGL 上下文")
+                    window.title.contains("WebGL FAIL") -> GpuResult(false, "WebGL 未通过 Adreno 绘制或像素读回")
+                    else -> GpuResult(false, "Chromium GPU 进程或图形窗口未就绪")
+                }
+            }
+            val counters = withContext(Dispatchers.IO) { hardwareImports() }
+            val report = withContext(Dispatchers.IO) {
+                output.bufferedReader().use { source -> CharArray(32768).let { buffer ->
+                    val size = source.read(buffer).coerceAtLeast(0)
+                    String(buffer, 0, size)
+                } }
+            }
+            val renderer = report.lineSequence().firstOrNull { it.startsWith("GL_RENDERER=") }
+                ?.substringAfter('=')?.take(100).orEmpty()
+            val vendor = report.lineSequence().firstOrNull { it.startsWith("GL_VENDOR=") }.orEmpty()
+            Log.i("WarpGraphics", "${path.label} EGL exit=${guest.exitValue()}, firstFrame=${window.firstFrame}, " +
+                "renderer=$renderer, AHB imports=$before → $counters")
+            return when {
+                guest.exitValue() != 0 -> GpuResult(false, when (guest.exitValue()) {
+                    11 -> "连接显示服务失败"
+                    12, 13 -> "初始化 EGL 或选择配置失败"
+                    14 -> "创建 EGL 绘制表面失败"
+                    15, 16 -> "像素读回或提交画面失败"
+                    else -> "EGL 探针退出（${guest.exitValue()}）"
+                })
+                !vendor.contains("Qualcomm", true) || !renderer.contains("Adreno", true) ->
+                    GpuResult(false, "EGL 客户端未报告 Qualcomm Adreno")
+                !window.firstFrame || !report.lineSequence().any { it == "FRAMES=48" } ||
+                    before == null || counters == null || counters <= before ->
+                    GpuResult(false, "合成器未导入 GPU 画面")
+                else -> GpuResult(true, renderer)
+            }
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                process?.let { guest ->
+                    if (guest.isAlive) guest.destroyForcibly()
+                    guest.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+                }
+                directory?.deleteRecursively()
+            }
+            NativeBridge.nativeOnActivityFocusChanged(id, false)
+            NativeBridge.nativeOnActivitySurfaceDestroyed(id)
+            NativeBridge.nativeReleaseLaunchHost(id)
+            NativeBridge.restoreFocusedView()
+            reader.setOnImageAvailableListener(null, null)
+            reader.close()
+            probe = null
+        }
+    }
+
+    private fun hardwareImports(): Long? = NativeBridge.nativeQueryState()?.split(' ')
+        ?.firstOrNull { it.startsWith("wlegl_import_texture_total=") }?.substringAfter('=')?.toLongOrNull()
+
+    private fun hasRedCanvas(frame: Image): Boolean {
+        val plane = frame.planes.firstOrNull() ?: return false
+        val bytes = plane.buffer
+        var samples = 0
+        for (y in 0 until frame.height step 8) {
+            for (x in 0 until frame.width step 8) {
+                val offset = y * plane.rowStride + x * plane.pixelStride
+                if (offset + 2 >= bytes.limit()) break
+                val red = bytes.get(offset).toInt() and 255
+                val otherChannelLimit = red * 2 / 5
+                if (red > 165 && (bytes.get(offset + 1).toInt() and 255) < otherChannelLimit &&
+                    (bytes.get(offset + 2).toInt() and 255) < otherChannelLimit && ++samples >= 64) return true
+            }
+        }
+        return false
+    }
+
+    fun firstFrame(id: String) {
+        probe?.takeIf { it.id == id }?.firstFrame = true
+    }
+
+    fun launchApp(app: LinuxApp, chromiumCompatibility: Boolean, software: Boolean) {
         // One reservation per desktop id avoids ambiguous app_id matching for single-instance apps.
         tabs.firstOrNull { it.pending && it.title == app.name }?.let { selected(it.id); return }
         val tab = GraphicsTab(newId(), UUID.randomUUID().toString(), app.name, true)
@@ -164,6 +347,7 @@ internal class GraphicsSessions(
         changed()
         tab.launcher = scope.launch {
             try {
+                if (!software) detectGraphics(includeChromium = chromiumCompatibility)?.join()
                 prepare()
                 activate()
                 val token = withContext(Dispatchers.IO) {
@@ -174,7 +358,7 @@ internal class GraphicsSessions(
                     if (tab.pending) failed(tab, "未收到图形窗口，请检查应用是否已安装及其显示支持。")
                 }
                 val result = withContext(Dispatchers.IO) {
-                    val process = linux.launchGraphics(app, token, chromiumCompatibility)
+                    val process = linux.launchGraphics(app, token, chromiumCompatibility, software)
                     try {
                         runInterruptible { process.waitFor() }
                     } finally {
@@ -194,6 +378,7 @@ internal class GraphicsSessions(
     }
 
     fun windowOpened(id: String) {
+        if (probe?.id == id) return
         if (tabs.any { it.windowId == id }) return
         val tab = GraphicsTab(newId(), id, titles.remove(id) ?: "Linux 窗口", false)
         tabs.add(tab)
@@ -202,6 +387,7 @@ internal class GraphicsSessions(
     }
 
     fun windowClosed(id: String) {
+        if (probe?.id == id) return
         titles.remove(id)
         tabs.firstOrNull { it.windowId == id && it.error == null }?.let { remove(it) }
     }
@@ -209,6 +395,12 @@ internal class GraphicsSessions(
     fun selectWindow(id: String) { tabs.firstOrNull { it.windowId == id }?.let { selected(it.id) } }
 
     fun titleChanged(id: String, title: String) {
+        probe?.takeIf { it.id == id }?.let {
+            if (title.contains("Mobile Terminal WebGL OK ") || title.contains("Mobile Terminal WebGL FAIL ")) {
+                it.title = title
+            }
+            return
+        }
         if (title.isBlank()) return
         val tab = tabs.firstOrNull { it.windowId == id }
         if (tab == null) titles[id] = title else tab.title = title

@@ -1,0 +1,20 @@
+--- a/scripts/build-libhybris.sh
++++ b/scripts/build-libhybris.sh
+@@ -218,7 +218,7 @@ export PKG_CONFIG_LIBDIR="$PC_DIR"
+ # headers — otherwise the host's x86_64 stdint.h shadows the cross-
+ # glibc's, and uintptr_t collapses to 32-bit because the host's
+ # bits/wordsize.h gates LP64 on __x86_64__ being defined.
+-export CPPFLAGS="-idirafter $HOST_WAYLAND_INCLUDE"
++export CPPFLAGS="-idirafter $HOST_WAYLAND_INCLUDE ${TAWC_LIBHYBRIS_CPPFLAGS:-}"
+ 
+ # ── autogen.sh (regen configure if needed) ──
+ if [ ! -x "$BUILD_DIR/configure" ] || [ "$CLEAN" = "1" ]; then
+@@ -275,7 +275,7 @@ CONFIGURE_ARGS=(
+ #     so every link fails with "cannot find crtbeginS.o").
+ # So stamp a fingerprint of both after each configure, and reconfigure
+ # from scratch whenever the recorded one doesn't match.
+-FINGERPRINT="crt=$("$CC_BIN" -print-file-name=crtbeginS.o) args=${CONFIGURE_ARGS[*]} cc=$CC"
++FINGERPRINT="crt=$("$CC_BIN" -print-file-name=crtbeginS.o) args=${CONFIGURE_ARGS[*]} cc=$CC cpp=$CPPFLAGS"
+ STAMP="$BUILD_DIR/.tawc-configure-stamp"
+ NEED_CONFIGURE=0
+ if [ "$CLEAN" = "1" ] || [ ! -f "$BUILD_DIR/Makefile" ]; then

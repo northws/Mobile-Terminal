@@ -6,6 +6,7 @@
 |---|---|---|
 | [Warp](https://github.com/warpdotdev/warp) | `warp_terminal`、终端依赖和 Bash 资源 | AGPL-3.0，`warpui_core` 与 `warpui` 使用 MIT |
 | [TAWC](https://github.com/wmww/tawc) | `tawcroot`、Wayland 合成器、输入法桥接、Android XWayland 构建 | TAWC 自有代码使用 MIT，原生依赖按上游 `deps/deps.list` 锁定 |
+| [TAWC 的 libhybris 分支](https://github.com/wmww/libhybris) | ARM64 Debian EGL、GLES 和图形平台桥接，提交 `ac17d9e228788f7da745609b7a6362d6242bbd71` 由 TAWC 清单锁定 | 随包附上游 Apache、BSD、GPL、ISC、LGPL 和 MIT 许可证 |
 | [Termux](https://github.com/termux/termux-app) | `terminal-emulator` 与 `TerminalRenderer` | Apache-2.0 |
 | [Apache Commons Compress](https://commons.apache.org/proper/commons-compress/) | Debian tar 归档读取 | Apache-2.0 |
 | [Debian 镜像源码](https://github.com/debuerreotype/docker-debian-artifacts) | 首次安装所用 Debian 13 ARM64 基础文件 | Debian 各软件包的许可证见 guest 的 `/usr/share/doc` |
@@ -14,3 +15,4 @@ Android 首次安装下载的 Debian 镜像必须与锁定的 SHA-256 一致。�
 
 - `tawc-tabs.patch` 在锁定版合成器上添加按主窗口关闭的 JNI 入口，并将 Warp 独立主目录纳入桌面应用扫描。通过原生 ARM64 编译、两种协议的窗口启动以及取消关闭场景验收。
 - `tawc-libtool.patch` 适配新版 Libtool 移除的宏。Bionic 使用 ELF 的无前缀 C 符号。通过 XWayland 全量交叉编译验证。
+- `tawc-libhybris.patch` 让 Debian 构建复用 XWayland 依赖中锁定的私有 Wayland EGL 头文件，并在头文件路径变动时刷新配置。通过 ARM64 交叉编译验证。

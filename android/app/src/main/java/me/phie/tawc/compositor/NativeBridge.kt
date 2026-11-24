@@ -24,6 +24,7 @@ internal object NativeBridge {
     external fun nativeStartCompositor(scale: Float, width: Int, height: Int, xwayland: Boolean, pointer: Int): Boolean
     external fun nativeStopCompositor()
     external fun nativeIsCompositorRunning(): Boolean
+    external fun nativeQueryState(): String?
     external fun nativeSetTintBuffersByType(tint: Boolean)
     external fun nativeScanWarpApplications(root: String, home: String): String?
     external fun nativeReserveLaunchHost(id: String, desktopId: String, pointer: Int): String?
@@ -48,6 +49,11 @@ internal object NativeBridge {
     fun attach(view: GraphicsView) { views[view.windowId] = view }
     fun detach(view: GraphicsView) { views.remove(view.windowId, view) }
     fun isAttached(view: GraphicsView) = views[view.windowId] === view
+    fun restoreFocusedView() {
+        views.values.firstOrNull { it.hasWindowFocus() }?.let {
+            nativeOnActivityFocusChanged(it.windowId, true)
+        }
+    }
     private fun dispatch(block: GraphicsSessions.() -> Unit) = main.post { sessions?.block() }
     private fun view(id: String, block: GraphicsView.() -> Unit) = main.post { views[id]?.block() }
 
@@ -57,7 +63,7 @@ internal object NativeBridge {
     @JvmStatic fun activateActivity(id: String) { dispatch { selectWindow(id) } }
     @JvmStatic fun finishActivity(id: String) { dispatch { windowClosed(id) } }
     @JvmStatic fun onLaunchMatched(id: String) { dispatch { launchMatched(id) } }
-    @JvmStatic fun onLaunchShown(id: String) = Unit
+    @JvmStatic fun onLaunchShown(id: String) { dispatch { firstFrame(id) } }
     @JvmStatic fun onToplevelCountChanged(count: Int) = Unit
     @JvmStatic fun setActivityFullscreen(id: String, fullscreen: Boolean) = Unit
     @JvmStatic fun updateWindowMetadata(id: String, title: String, appId: String,

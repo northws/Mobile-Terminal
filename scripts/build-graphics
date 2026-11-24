@@ -6,9 +6,10 @@ libs=$3
 ndk_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 target=aarch64-linux-android
 patches="$(cd "$(dirname "$0")/../upstream" && pwd)"
+project="$(dirname "$patches")"
 
 cd "$tawc"
-for patch_file in "$patches/tawc-libtool.patch" "$patches/tawc-tabs.patch"; do
+for patch_file in "$patches/tawc-libtool.patch" "$patches/tawc-tabs.patch" "$patches/tawc-libhybris.patch"; do
     if ! git apply --reverse --check "$patch_file" 2>/dev/null; then
         git apply "$patch_file"
     fi
@@ -35,6 +36,7 @@ if [[ "${4:-all}" == compositor ]]; then exit; fi
 bash scripts/build-xwayland.sh --abi=aarch64
 x11="$PWD/build/xwayland-aarch64/install"
 mkdir -p "$assets/graphics" "$libs/arm64-v8a"
+bash "$project/scripts/build-adreno" "$PWD" "$assets/graphics"
 cp "compositor/target/$target/release/libcompositor.so" "$libs/arm64-v8a/"
 cp "$x11/bin/Xwayland" "$libs/arm64-v8a/libxwayland.so"
 cp "$x11/bin/xkbcomp" "$libs/arm64-v8a/libxkbcomp.so"

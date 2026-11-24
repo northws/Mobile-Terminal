@@ -2,4 +2,5 @@
 scripts/* text eol=lf
 *.sh text eol=lf
 *.patch text eol=lf
+graphics/warp-x11-egl text eol=lf
 upstream/revisions.env text eol=lf

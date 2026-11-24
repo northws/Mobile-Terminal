@@ -103,7 +103,8 @@ class TerminalService : Service() {
                 val name = intent.getStringExtra(APP_NAME)
                 if (id != null && name != null) {
                     val app = LinuxApp(id, name, intent.getStringExtra(APP_FILE))
-                    graphics.launchApp(app, chromiumCompatibility = intent.action == ADD_COMPATIBLE_CHROMIUM)
+                    graphics.launchApp(app, chromiumCompatibility = intent.action == ADD_COMPATIBLE_CHROMIUM,
+                        software = intent.getBooleanExtra(SOFTWARE_GRAPHICS, false))
                 }
             }
         }
@@ -149,6 +150,7 @@ class TerminalService : Service() {
             }
             if (tab in tabs) {
                 tab.start()
+                graphics.detectGraphics(includeChromium = false)
             } else {
                 retiring.remove(tab)
                 tab.terminate()
@@ -263,6 +265,7 @@ class TerminalService : Service() {
         internal const val INSTALL_GRAPHICS = "install_graphics"
         internal const val ADD_GRAPHICS = "add_graphics"
         internal const val ADD_COMPATIBLE_CHROMIUM = "add_compatible_chromium"
+        internal const val SOFTWARE_GRAPHICS = "software_graphics"
         internal const val APP_ID = "app_id"
         internal const val APP_NAME = "app_name"
         internal const val APP_COMMAND = "app_command"
