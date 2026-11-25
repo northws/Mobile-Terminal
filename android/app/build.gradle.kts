@@ -9,6 +9,7 @@ val tawc = file(System.getenv("WARP_TAWC_DIR") ?: "../../.upstream/tawc")
 val revisions = rootProject.file("../upstream/revisions.env").readLines().associate { line ->
     line.substringBefore('=') to line.substringAfter('=')
 }
+val isolatedTest = providers.gradleProperty("warpIsolatedTest").orNull == "true"
 val debian = revisions.getValue("DEBIAN_REV")
 val debianUrl = "https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/$debian/trixie/slim/oci/blobs/rootfs.tar.gz"
 
@@ -20,6 +21,7 @@ android {
 
     defaultConfig {
         applicationId = "dev.warpterminal.mobile"
+        manifestPlaceholders["appLabel"] = "@string/app_name"
         minSdk = 29
         targetSdk = 36
         versionCode = 13
@@ -29,6 +31,13 @@ android {
         buildConfigField("String", "DEBIAN_SHA256", "\"${revisions.getValue("DEBIAN_SHA256")}\"")
         buildConfigField("long", "DEBIAN_BYTES", "${revisions.getValue("DEBIAN_BYTES")}L")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes.named("debug") {
+        if (isolatedTest) {
+            applicationIdSuffix = ".preview"
+            manifestPlaceholders["appLabel"] = "@string/app_name_preview"
+        }
     }
 
     sourceSets.named("main") {

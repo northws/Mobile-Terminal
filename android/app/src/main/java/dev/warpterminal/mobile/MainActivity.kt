@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -39,6 +40,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -49,10 +51,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -76,7 +82,15 @@ class MainActivity : ComponentActivity() {
         )
         bindService(Intent(this, TerminalService::class.java), connection, Context.BIND_AUTO_CREATE)
         setContent {
-            MaterialTheme(colorScheme = WarpColors) {
+            val prefs = remember { getSharedPreferences("appearance", MODE_PRIVATE) }
+            var appearance by remember { mutableStateOf(Appearance.restore(
+                prefs.getString("palette", null), prefs.getString("size", null))) }
+            val bars = remember { WindowCompat.getInsetsController(window, window.decorView) }
+            LaunchedEffect(appearance.palette) {
+                bars.isAppearanceLightStatusBars = appearance.palette == Palette.Paper
+                bars.isAppearanceLightNavigationBars = appearance.palette == Palette.Paper
+            }
+            MaterialTheme(colorScheme = appearance.palette.colors) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val service = terminal
                     if (service == null) {
@@ -84,7 +98,10 @@ class MainActivity : ComponentActivity() {
                             CircularProgressIndicator()
                         }
                     } else {
-                        TerminalHome(service) { intent ->
+                        TerminalHome(service, bars, appearance, changeAppearance = { next ->
+                            appearance = next
+                            prefs.edit().putString("palette", next.palette.name).putString("size", next.size.name).apply()
+                        }) { intent ->
                             ContextCompat.startForegroundService(
                                 this, intent.setClass(this, TerminalService::class.java),
                             )
@@ -101,26 +118,34 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val WarpColors = darkColorScheme(
-    primary = Color(0xFF9CF1CE),
-    onPrimary = Color(0xFF003827),
-    secondaryContainer = Color(0xFF254339),
-    onSecondaryContainer = Color(0xFFCCF4E5),
-    background = Color(0xFF101716),
-    surface = Color(0xFF192220),
-    surfaceVariant = Color(0xFF23312E),
-    onSurface = Color(0xFFE4F0EA),
-    onSurfaceVariant = Color(0xFFABC5BA),
-    error = Color(0xFFFFAFA3),
-)
-
 @Composable
-private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
+private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerCompat, appearance: Appearance,
+    changeAppearance: (Appearance) -> Unit, start: (Intent) -> Unit) {
     val notices = remember { SnackbarHostState() }
     val tab = service.tabs.firstOrNull { it.id == service.selected }
     val graphics = service.graphics
     val window = graphics.tabs.firstOrNull { it.id == service.selected }
     val application = service.terminalAppTabs.firstOrNull { it.id == service.selected }
+    val selected = (tab?.id ?: window?.id ?: application?.id).takeIf { service.installation == Installation.Ready }
+    var owner by rememberSaveable { mutableStateOf<Int?>(null) }
+    val activeOwner = fullscreenOwner(owner, selected)
+    val fullscreen = activeOwner != null
+    if (owner != activeOwner) SideEffect { owner = activeOwner }
+    DisposableEffect(fullscreen, bars) {
+        if (fullscreen) {
+            val previous = bars.systemBarsBehavior
+            bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            bars.hide(WindowInsetsCompat.Type.systemBars())
+            onDispose {
+                bars.show(WindowInsetsCompat.Type.systemBars())
+                bars.systemBarsBehavior = previous
+            }
+        } else onDispose { }
+    }
+    val imeOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    BackHandler(enabled = fullscreen && !imeOpen) { owner = null }
+    var more by remember { mutableStateOf(false) }
+    var settings by rememberSaveable { mutableStateOf(false) }
     val commandBlockStates = rememberSaveableStateHolder()
     val sessionIds = service.tabs.map(TerminalTab::id)
     var previousSessionIds by rememberSaveable { mutableStateOf(emptyList<Int>()) }
@@ -147,16 +172,16 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
         .putExtra(TerminalService.APP_NAME, app.name)
         .putExtra(TerminalService.APP_FILE, app.desktopFile)
         .putExtra(TerminalService.CHROMIUM_RENDERING, rendering.name))
-    Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
+    TabViewport(appearance.size, fullscreen, exit = { owner = null }) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().then(if (fullscreen) Modifier else Modifier.padding(horizontal = 12.dp, vertical = 6.dp)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f))
+            if (!fullscreen) Text(stringResource(R.string.app_name), Modifier.weight(1f), maxLines = 1,
+                overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             if (service.installation == Installation.Ready) {
-                FileActions(service.linux, notices)
-                Box {
+                FileActions(service.linux, notices, visible = !fullscreen)
+                if (!fullscreen) Box {
                     FilledTonalButton(onClick = { menu = true }) { Text("＋ 新标签") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text("Bash") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
@@ -172,8 +197,16 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
                     }
                 }
             }
+            if (!fullscreen) Box {
+                TextButton(onClick = { more = true }) { Text("更多") }
+                DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                    DropdownMenuItem(text = { Text("当前标签全屏") }, enabled = selected != null,
+                        onClick = { more = false; owner = selected })
+                    DropdownMenuItem(text = { Text("外观设置") }, onClick = { more = false; settings = true })
+                }
+            }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+        if (!fullscreen) HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
 
         when (val state = service.installation) {
             Installation.Absent -> InstallCard("在手机上安装 Debian", "首次安装需要联网和 600 MB 可用空间。") {
@@ -191,7 +224,7 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
                 InstallCard(if (service.interrupted) "上次会话已结束" else "打开本地终端",
                     "Linux 主目录保存在此设备上。", "打开 Bash", ::bash)
             } else {
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+                if (!fullscreen) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     val labels = service.tabs.map { it.id to if (it.exited) "${it.title} · 已结束" else it.title } +
@@ -206,12 +239,12 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
                 if (tab != null) {
                     key(tab.id) {
                         if (tab.showingStartupApp) {
-                            TerminalAppPanel(tab.title, tab, Modifier.weight(1f), closesSession = true) {
+                            TerminalAppPanel(tab.title, tab, Modifier.weight(1f), fullscreen, closesSession = true) {
                                 service.closeTab(tab)
                             }
                         } else {
                             commandBlockStates.SaveableStateProvider(tab.id) {
-                                SessionPanel(tab, Modifier.weight(1f),
+                                SessionPanel(tab, Modifier.weight(1f), fullscreen,
                                     appActive = tab.alternate || service.terminalAppTabs.any { it.session == tab },
                                     openApp = { service.openTerminalApp(tab) },
                                     close = { service.closeTab(tab) })
@@ -220,17 +253,18 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
                     }
                 } else if (application != null) {
                     key(application.id) {
-                        TerminalAppPanel(application.title, application.session, Modifier.weight(1f)) {
+                        TerminalAppPanel(application.title, application.session, Modifier.weight(1f), fullscreen) {
                             service.closeTerminalApp(application)
                         }
                     }
                 } else if (window != null) {
-                    key(window.id) { GraphicsPanel(window, Modifier.weight(1f)) { graphics.close(window) } }
+                    key(window.id) { GraphicsPanel(window, Modifier.weight(1f), fullscreen) { graphics.close(window) } }
                 }
             }
         }
         SnackbarHost(notices)
     }
+    if (settings) AppearanceDialog(appearance, changeAppearance) { settings = false }
     if (showCommand && service.installation == Installation.Ready) {
         TerminalCommandPicker(close = { showCommand = false }, open = {
             showCommand = false
@@ -294,6 +328,19 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun TabViewport(size: TerminalSize, fullscreen: Boolean, exit: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit) {
+    Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
+        CompositionLocalProvider(LocalTerminalSize provides size) {
+            Column(Modifier.fillMaxSize(), content = content)
+        }
+        if (fullscreen) FilledTonalButton(onClick = exit,
+            modifier = Modifier.align(Alignment.TopEnd).padding(end = 4.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp)) { Text("退出全屏") }
     }
 }
 
@@ -391,23 +438,27 @@ private fun GraphicsPicker(graphics: GraphicsSessions, close: () -> Unit, instal
 }
 
 @Composable
-private fun GraphicsPanel(tab: GraphicsTab, modifier: Modifier, close: () -> Unit) {
+private fun GraphicsPanel(tab: GraphicsTab, modifier: Modifier, fullscreen: Boolean, close: () -> Unit) {
     var view by remember { mutableStateOf<GraphicsView?>(null) }
-    Column(modifier.fillMaxWidth()) {
-        AppTabToolbar(tab.title, view != null, keyboard = { view?.showKeyboard() }, close = close)
-        val error = tab.error
-        when {
-            error != null -> Text(error, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
-            tab.pending -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("正在打开 ${tab.title}")
-                LinearProgressIndicator(Modifier.fillMaxWidth())
+    Box(modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxSize()) {
+            if (!fullscreen) AppTabToolbar(tab.title, view != null, keyboard = { view?.showKeyboard() }, close = close)
+            val error = tab.error
+            when {
+                error != null -> Text(error, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
+                tab.pending -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("正在打开 ${tab.title}")
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                else -> AndroidView(
+                    factory = { context -> GraphicsView(context, tab.windowId).also { view = it } },
+                    modifier = Modifier.fillMaxSize(),
+                    onRelease = { view = null },
+                )
             }
-            else -> AndroidView(
-                factory = { context -> GraphicsView(context, tab.windowId).also { view = it } },
-                modifier = Modifier.fillMaxSize(),
-                onRelease = { view = null },
-            )
         }
+        if (fullscreen && view != null) FilledTonalButton(onClick = { view?.showKeyboard() },
+            modifier = Modifier.align(Alignment.BottomEnd)) { Text("键盘") }
     }
 }
 
@@ -426,13 +477,14 @@ private fun TerminalAppPanel(
     title: String,
     tab: TerminalTab,
     modifier: Modifier,
+    fullscreen: Boolean,
     closesSession: Boolean = false,
     close: () -> Unit,
 ) {
     var view by remember { mutableStateOf<TerminalGrid?>(null) }
     var confirmClose by rememberSaveable { mutableStateOf(false) }
     Column(modifier.fillMaxWidth()) {
-        AppTabToolbar(title, view != null, keyboard = { view?.showKeyboard() }, close = {
+        if (!fullscreen) AppTabToolbar(title, view != null, keyboard = { view?.showKeyboard() }, close = {
             if (closesSession && tab.running) confirmClose = true else close()
         })
         TerminalSurface(tab, Modifier.weight(1f)) { view = it }
@@ -451,11 +503,12 @@ private fun TerminalAppPanel(
 @Composable
 private fun TerminalSurface(tab: TerminalTab, modifier: Modifier, onView: (TerminalGrid?) -> Unit = {}) {
     val clipboard = LocalClipboardManager.current
+    val fontPx = gridFontPixels()
     Column(modifier.fillMaxWidth()) {
         val revision = tab.revision
         AndroidView(
-            factory = { context -> TerminalGrid(context, tab).also(onView) },
-            update = { if (revision >= 0) it.invalidate() },
+            factory = { context -> TerminalGrid(context, tab, fontPx).also(onView) },
+            update = { it.setFontPixels(fontPx); if (revision >= 0) it.invalidate() },
             modifier = Modifier.fillMaxWidth().weight(1f),
             onRelease = { onView(null) },
         )
@@ -486,6 +539,7 @@ private fun InstallCard(title: String, body: String, action: String = "安装 De
 private fun SessionPanel(
     tab: TerminalTab,
     modifier: Modifier,
+    fullscreen: Boolean,
     appActive: Boolean,
     openApp: () -> Unit,
     close: () -> Unit,
@@ -505,7 +559,7 @@ private fun SessionPanel(
         }
     }
     Column(modifier) {
-        Row(
+        if (!fullscreen) Row(
             Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(start = 16.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -539,12 +593,14 @@ private fun SessionPanel(
             LaunchedEffect(lastBlock?.id, lastBlock?.outputRevision, lastBlock?.code, followTail, outputHeight) {
                 if (followTail && tab.blocks.isNotEmpty()) state.requestScrollToItem(tab.blocks.size)
             }
-            val context = LocalContext.current
-            val measure = remember(context) { TerminalGrid.renderer(context) }
+            val fontPx = gridFontPixels()
+            val measure = remember(fontPx) { TerminalGrid.renderer(fontPx) }
+            var viewport by remember { mutableStateOf(IntSize.Zero) }
+            LaunchedEffect(viewport, measure, appActive) {
+                if (!appActive) TerminalGrid.resize(tab, measure, viewport.width, viewport.height)
+            }
             Column(
-                Modifier.weight(1f).fillMaxWidth().onSizeChanged { size ->
-                    if (!appActive) TerminalGrid.resize(tab, measure, size.width, size.height)
-                },
+                Modifier.weight(1f).fillMaxWidth().onSizeChanged { viewport = it },
             ) {
                 LazyColumn(
                     Modifier.weight(1f).fillMaxWidth().nestedScroll(manualScroll).onSizeChanged { outputHeight = it.height },
@@ -656,7 +712,7 @@ private fun BlockCard(block: CommandBlock) {
                                 append(line.text)
                             }
                         }
-                    }, fontFamily = FontFamily.Monospace, fontSize = 13.sp, softWrap = true)
+                    }, fontFamily = FontFamily.Monospace, fontSize = LocalTerminalSize.current.blockSp.sp, softWrap = true)
                 }
             }
             if (block.truncated) Text("命令块输出已截断。", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -671,7 +727,7 @@ private fun BlockCard(block: CommandBlock) {
 }
 
 @Composable
-private fun FileActions(linux: LinuxEnvironment, notices: SnackbarHostState) {
+private fun FileActions(linux: LinuxEnvironment, notices: SnackbarHostState, visible: Boolean) {
     val context = LocalContext.current
     val exchange = remember(linux) { FileExchange(context.contentResolver, linux.home) }
     val scope = rememberCoroutineScope()
@@ -708,7 +764,7 @@ private fun FileActions(linux: LinuxEnvironment, notices: SnackbarHostState) {
             "已导出 ${path.last()}"
         }
     }
-    Box {
+    if (visible) Box {
         TextButton(onClick = { menu = true }) { Text("文件") }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             if (transfer != null) {

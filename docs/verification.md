@@ -1,5 +1,16 @@
 # Mobile Terminal 验证记录
 
+## 标签全屏与外观设置
+
+2026-11-26，Debian 13 / WSL2（JDK 21、Gradle 8.12、Android SDK 36）运行 `:app:testDebugUnitTest`，8 项通过（外观与全屏状态 3 项、命令块 2 项、帧协议 3 项）。完整原生重建未完成；未运行本次 Rust 和 Bash PTY 主机回归，也未运行模拟器。
+
+USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00、Android 17、`arm64-v8a`）安装 [Mobile Terminal (Test)](https://github.com/northws/Mobile-Terminal/releases/download/v0.2.12-preview.1/mobile-terminal-arm64-preview-debug.apk)，包名为 `dev.warpterminal.mobile.preview`。测试包通过 v2 签名检查，本地与设备 APK 的 SHA-256 均为 `cfae8cc5f461e44279b10197aaf80f4d928f631bb74485ed36ab7d259b31a6a1`。Android 源码使用当前工作树，87 个原生库及生成资源条目与已安装 0.2.11 APK 逐字节一致。原应用和测试版 UID 不同，原 APK 安装路径和 SHA-256 `5bf6abbabfca9eb37ab89a1eacd86366541c41e9a65bbcc2fa5a36516087eaa5` 保持不变；未改动原应用的 Debian 数据。
+
+- 7 项 ARM64 真机自动测试（本地日志：`build/preview-device-test.txt`）通过，包括新建独立 Debian 环境、Bash/PTY 回归和字号变化触发网格重新布局。
+- Bash 命令块进入全屏后可输入并运行命令，返回普通布局后仍保留同一条命令输出。Vim 全屏保留终端快捷键，退出全屏后恢复应用工具栏和关闭确认。
+- 选择浅色纸白和大字号，重启测试版后两项仍选中；「恢复默认」恢复薄荷配色和标准字号。
+- 图形标签沉浸模式、横竖屏切换、中文输入法及图形窗口保存流程仍待专项实测。
+
 ## 0.2.11 Chromium 原生 Wayland 硬件合成
 
 2026-11-25 在荣耀 MagicPad3 Pro 13.3（YLP-W00、ARM64、Android 17、Adreno 840）通过 USB ADB 验证 Debian Chromium `156.0.8078.108-1~deb13u1`。Qualcomm 驱动为 `0842.53`。

@@ -20,8 +20,19 @@ import com.termux.terminal.KeyHandler
 import com.termux.terminal.TextStyle
 import com.termux.view.TerminalRenderer
 
-internal class TerminalGrid(context: Context, private val tab: TerminalTab) : View(context) {
-    private val renderer = renderer(context)
+internal class TerminalGrid(context: Context, private val tab: TerminalTab, fontPx: Int) : View(context) {
+    private var renderedFontPx = fontPx
+    private var renderer = renderer(fontPx)
+
+    fun setFontPixels(value: Int) {
+        if (renderedFontPx == value) return
+        renderedFontPx = value
+        renderer = renderer(value)
+        resize(tab, renderer, width, height)
+        scrollDistance = 0f
+        invalidate()
+    }
+
     private var topRow = 0
     private var scrollDistance = 0f
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
@@ -124,7 +135,6 @@ internal class TerminalGrid(context: Context, private val tab: TerminalTab) : Vi
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         super.onSizeChanged(width, height, oldWidth, oldHeight)
         resize(tab, renderer, width, height)
-        topRow = 0
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -138,9 +148,7 @@ internal class TerminalGrid(context: Context, private val tab: TerminalTab) : Vi
     }
 
     companion object {
-        fun renderer(context: Context) = TerminalRenderer(
-            (14 * context.resources.displayMetrics.scaledDensity).toInt(), Typeface.MONOSPACE,
-        )
+        fun renderer(fontPx: Int) = TerminalRenderer(fontPx.coerceAtLeast(1), Typeface.MONOSPACE)
 
         fun resize(tab: TerminalTab, renderer: TerminalRenderer, width: Int, height: Int) {
             if (width <= 0 || height <= 0) return

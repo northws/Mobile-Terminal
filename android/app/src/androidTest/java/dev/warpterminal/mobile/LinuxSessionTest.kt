@@ -31,7 +31,7 @@ class LinuxSessionTest {
     @Test fun terminalGridDrawsOnlyInsideItsTab() = runBlocking {
         withContext(Dispatchers.Main) {
             val context = InstrumentationRegistry.getInstrumentation().targetContext
-            val grid = TerminalGrid(context, TerminalTab(1, LinuxEnvironment(context), this) {})
+            val grid = TerminalGrid(context, TerminalTab(1, LinuxEnvironment(context), this) {}, 14)
             grid.layout(0, 0, 40, 24)
             val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
@@ -42,6 +42,23 @@ class LinuxSessionTest {
             assertEquals(Color.MAGENTA, bitmap.getPixel(24, 8))
             assertEquals(Color.MAGENTA, bitmap.getPixel(24, 48))
             assertNotEquals(Color.MAGENTA, bitmap.getPixel(24, 24))
+        }
+    }
+
+    @Test fun gridFontChangeResizesTheExistingEmulatorAtFixedBounds() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val tab = TerminalTab(1, LinuxEnvironment(context), this) {}
+            val grid = TerminalGrid(context, tab, 14)
+            grid.layout(0, 0, 480, 320)
+            val columns = tab.emulator.mColumns
+            val rows = tab.emulator.mRows
+            grid.setFontPixels(20)
+            assertTrue(tab.emulator.mColumns < columns)
+            assertTrue(tab.emulator.mRows < rows)
+            grid.setFontPixels(14)
+            assertEquals(columns, tab.emulator.mColumns)
+            assertEquals(rows, tab.emulator.mRows)
         }
     }
 
