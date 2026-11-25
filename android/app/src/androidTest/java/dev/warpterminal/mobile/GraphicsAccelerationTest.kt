@@ -42,16 +42,21 @@ class GraphicsAccelerationTest {
             assertEquals(ChromiumBackend.WAYLAND_BGRA, GraphicsAcceleration(context).chromiumBackend(chromium))
             assertNull(restored.chromiumBackend(chromium, ChromiumRendering.SOFTWARE))
             restored.record(GpuPath.X11, GpuResult(true, "Adreno (TM) 840", bgraTextureVerified = true))
-            restored.record(GpuPath.CHROMIUM, GpuResult(true, "Adreno", ChromiumBackend.XWAYLAND_COMPOSITING_BGRA,
-                softwareCompositor = ChromiumBackend.WAYLAND_BGRA))
+            restored.record(GpuPath.CHROMIUM, GpuResult(true, "Adreno", ChromiumBackend.WAYLAND_COMPOSITING_BGRA,
+                softwareCompositor = ChromiumBackend.WAYLAND,
+                xwaylandCompositor = ChromiumBackend.XWAYLAND_COMPOSITING_BGRA))
             val withCompositing = GraphicsAcceleration(context)
-            assertEquals(ChromiumBackend.XWAYLAND_COMPOSITING_BGRA, withCompositing.chromiumBackend(chromium))
-            assertEquals(ChromiumBackend.WAYLAND_BGRA,
+            assertEquals(ChromiumBackend.WAYLAND_COMPOSITING_BGRA, withCompositing.chromiumBackend(chromium))
+            assertEquals(ChromiumBackend.XWAYLAND_COMPOSITING_BGRA,
+                withCompositing.chromiumBackend(chromium, ChromiumRendering.XWAYLAND_COMPOSITING))
+            assertEquals(ChromiumBackend.WAYLAND,
                 withCompositing.chromiumBackend(chromium, ChromiumRendering.SOFTWARE_COMPOSITING))
             assertNull(withCompositing.chromiumBackend(chromium, ChromiumRendering.SOFTWARE))
+            withCompositing.record(GpuPath.WAYLAND, GpuResult(true, "Adreno"))
+            assertEquals(ChromiumBackend.XWAYLAND_COMPOSITING_BGRA, withCompositing.chromiumBackend(chromium))
             withCompositing.record(GpuPath.X11, GpuResult(false, "EGL timeout"))
-            assertEquals(ChromiumBackend.WAYLAND_BGRA, withCompositing.chromiumBackend(chromium))
-            withCompositing.record(GpuPath.WAYLAND, GpuResult(true, "Adreno", bgraTextureVerified = false))
+            assertEquals(ChromiumBackend.WAYLAND, withCompositing.chromiumBackend(chromium))
+            withCompositing.record(GpuPath.WAYLAND, GpuResult(false, "EGL timeout"))
             assertNull(withCompositing.chromiumBackend(chromium))
             restored.record(GpuPath.X11, GpuResult(true, "Adreno"))
             restored.record(GpuPath.CHROMIUM, GpuResult(true, "Adreno", ChromiumBackend.XWAYLAND))

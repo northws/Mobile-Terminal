@@ -1,5 +1,24 @@
 # Mobile Terminal 验证记录
 
+## 0.2.11 Chromium 原生 Wayland 硬件合成
+
+2026-11-25 在荣耀 MagicPad3 Pro 13.3（YLP-W00、ARM64、Android 17、Adreno 840）通过 USB ADB 验证 Debian Chromium `156.0.8078.108-1~deb13u1`。Qualcomm 驱动为 `0842.53`。
+
+没有可用 DRM render node 时，Chromium 的分离式 GPU 进程回退到软件合成。原生 Wayland 模式将 GPU 线程放在浏览器进程内，使 Ozone 能访问原生窗口的 Wayland 连接。libhybris 使用独立连接初始化 Android EGL，并通过该窗口的 Wayland 连接提交硬件缓冲区。原生 EGL 路径使用整数缓冲区缩放，解决了平板分数缩放下的页面裁切。隔离配置的 Wayland 协议日志确认了 `android_wlegl` 与实际的 `wl_buffer` 提交。[Chromium Wayland EGL 输出](https://chromium.googlesource.com/chromium/src/+/main/ui/ozone/platform/wayland/gpu/gl_surface_wayland.cc)
+
+| 场景 | ARM64 真机结果 |
+|---|---|
+| 原生 Wayland | 「兼容启动」选择「Wayland · 硬件合成」。Chromium 图形标签显示完整页面，`chrome://gpu` 显示 `Compositing: Hardware accelerated` 和 `WebGL: Hardware accelerated`。 |
+| WebGL 1 和 2 | 渲染器为 `ANGLE (Qualcomm, Adreno (TM) 840, OpenGL ES 3.2)`。两种 API 均依次读到 RGBA `[0,0,255,255]` 和 `[0,255,0,255]`。 |
+| XWayland 回退 | 从确认框选择「XWayland 硬件合成」，`chrome://gpu` 保持硬件合成，两个 API 的像素读回与原生 Wayland 一致。 |
+| 软件合成回退 | 从确认框选择「软件合成（保留 WebGL 加速）」。`chrome://gpu` 显示软件合成，两个 WebGL API 仍使用 Adreno 840，读回值一致。 |
+| 离线冷启动 | 开启飞行模式并关闭 Wi-Fi，强制停止应用，再从图形菜单启动 Chromium。`chrome://gpu` 仍报告硬件合成，两种 WebGL 的读回结果与在线一致。试验后恢复网络设置。 |
+| 覆盖安装 | Debian 主目录测试文件升级前后的 SHA-256 均为 `5e4a6713ee2ab7471c64b3460031b2c2d9faf599006d2bd89bec0eacea594124`。 |
+
+本次 ARM64 调试 APK 为 0.2.11（versionCode 13），通过 v2 签名检查。交付文件和设备上实测 APK 的 SHA-256 均为 `5bf6abbabfca9eb37ab89a1eacd86366541c41e9a65bbcc2fa5a36516087eaa5`。两项 Rust 单元测试、真实 Bash PTY 回放、五项 Android JVM 测试和六项 ARM64 真机自动回归通过。设备测试验证原生 Wayland 失效后选择 XWayland，随后在 XWayland 也失效时采用软件合成。
+
+本地验收附件包括[离线 GPU 页面](../build/wayland-compositing-offline-gpu.png)、[离线 WebGL 测试页](../build/wayland-compositing-offline-webgl.png)、[离线读回记录](../build/wayland-compositing-offline-session.txt)、[XWayland GPU 页面](../build/wayland-compositing-xwayland-gpu.png)和[软件合成 GPU 页面](../build/wayland-compositing-software-gpu.png)。
+
 ## 0.2.10 Chromium 页面硬件合成
 
 2026-11-25 在荣耀 MagicPad3 Pro 13.3（YLP-W00、ARM64、Android 17、Adreno 840）通过 USB ADB 测试 Debian Chromium `156.0.8078.108-1~deb13u1`。Qualcomm 驱动为 `0842.53`。

@@ -212,6 +212,11 @@ internal class LinuxEnvironment(private val context: Context) {
             args.addAll(listOf("--use-gl=angle", "--disable-software-rasterizer",
                 if (backend.display == GpuPath.WAYLAND) "--use-angle=gles" else "--use-angle=gles-egl"))
             if (!backend.gpuCompositing) args.add("--disable-gpu-compositing")
+            if (backend.gpuCompositing && backend.display == GpuPath.WAYLAND) {
+                // Ozone needs the browser's Wayland connection for native EGL windows.
+                // Its native EGL path applies integer buffer scale in place of a fractional viewport.
+                args.addAll(listOf("--in-process-gpu", "--disable-features=WaylandFractionalScaleV1"))
+            }
             if (backend.nativeBgra) args.add("--disable-angle-features=bgraTexImageFormatsBroken")
         }
         args.add(page)
@@ -259,7 +264,13 @@ internal class LinuxEnvironment(private val context: Context) {
                 "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/lib/hybris/10-mobile-terminal.json",
             ))
             if (chromiumBackend != null) args.add("MOBILE_TERMINAL_CHROMIUM_EGL=1")
-            if (chromiumBackend?.gpuCompositing == true) args.add("MOBILE_TERMINAL_CHROMIUM_X11_COMPOSITING=1")
+            if (chromiumBackend?.gpuCompositing == true) {
+                args.add(if (chromiumBackend.display == GpuPath.WAYLAND) {
+                    "MOBILE_TERMINAL_CHROMIUM_WAYLAND_COMPOSITING=1"
+                } else {
+                    "MOBILE_TERMINAL_CHROMIUM_X11_COMPOSITING=1"
+                })
+            }
         }
         if (activation != null) args.addAll(listOf("XDG_ACTIVATION_TOKEN=$activation", "DESKTOP_STARTUP_ID=$activation"))
         args.addAll(command)

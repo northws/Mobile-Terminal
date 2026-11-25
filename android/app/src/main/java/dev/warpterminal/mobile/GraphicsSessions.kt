@@ -230,7 +230,7 @@ internal class GraphicsSessions(
         for (backend in ChromiumBackend.entries.filterNot { it.gpuCompositing }) {
             if (!acceleration.canProbeChromium(backend)) continue
             val result = checkGpu(GpuPath.CHROMIUM, backend)
-            val display = if (backend.display == GpuPath.X11) "XWayland" else "Wayland"
+            val display = backend.displayLabel
             if (result.hardware) {
                 val detected = result.copy(detail = "$display · ${result.detail}", chromiumBackend = backend)
                 if (!detected.webGl2Only) {
@@ -240,17 +240,26 @@ internal class GraphicsSessions(
                 if (!backend.nativeBgra && webGl2 == null) webGl2 = detected
             } else failures.add("$display${if (backend.nativeBgra) " BGRA" else ""} · ${result.detail}")
         }
-        for (backend in ChromiumBackend.entries.filter { it.gpuCompositing }) {
+        val wayland = checkChromiumCompositing(GpuPath.WAYLAND)
+        val xwayland = checkChromiumCompositing(GpuPath.X11)
+        val accelerated = wayland ?: xwayland
+        return accelerated?.copy(softwareCompositor = software?.chromiumBackend,
+            xwaylandCompositor = if (wayland != null) xwayland?.chromiumBackend else null)
+            ?: software ?: webGl2 ?:
+            GpuResult(false, failures.joinToString("；").ifEmpty { "需要通过 Wayland 或 X11 EGL 检测" })
+    }
+
+    private suspend fun checkChromiumCompositing(display: GpuPath): GpuResult? {
+        for (backend in ChromiumBackend.entries.filter { it.display == display && it.gpuCompositing }) {
             if (!acceleration.canProbeChromium(backend)) continue
             val result = checkGpu(GpuPath.CHROMIUM, backend)
             if (result.hardware && !result.webGl2Only) {
-                return result.copy(detail = "XWayland · 硬件合成 · ${result.detail}",
-                    chromiumBackend = backend, softwareCompositor = software?.chromiumBackend)
+                return result.copy(detail = "${backend.displayLabel} · 硬件合成 · ${result.detail}",
+                    chromiumBackend = backend)
             }
-            Log.i("WarpGraphics", "Chromium XWayland GPU compositing: ${result.detail}")
+            Log.i("WarpGraphics", "Chromium ${backend.displayLabel} GPU compositing: ${result.detail}")
         }
-        return software ?: webGl2 ?:
-            GpuResult(false, failures.joinToString("；").ifEmpty { "需要通过 Wayland 或 X11 EGL 检测" })
+        return null
     }
 
     private suspend fun checkGpu(path: GpuPath, chromiumBackend: ChromiumBackend? = null): GpuResult {

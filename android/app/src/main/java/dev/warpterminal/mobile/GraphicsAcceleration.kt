@@ -23,11 +23,15 @@ internal enum class ChromiumBackend(
     WAYLAND_BGRA(GpuPath.WAYLAND, true),
     XWAYLAND(GpuPath.X11),
     XWAYLAND_BGRA(GpuPath.X11, true),
+    WAYLAND_COMPOSITING_BGRA(GpuPath.WAYLAND, nativeBgra = true, gpuCompositing = true),
+    WAYLAND_COMPOSITING(GpuPath.WAYLAND, gpuCompositing = true),
     XWAYLAND_COMPOSITING_BGRA(GpuPath.X11, nativeBgra = true, gpuCompositing = true),
-    XWAYLAND_COMPOSITING(GpuPath.X11, gpuCompositing = true),
+    XWAYLAND_COMPOSITING(GpuPath.X11, gpuCompositing = true);
+
+    val displayLabel get() = if (display == GpuPath.X11) "XWayland" else display.label
 }
 
-internal enum class ChromiumRendering { AUTOMATIC, SOFTWARE, WEBGL2, SOFTWARE_COMPOSITING }
+internal enum class ChromiumRendering { AUTOMATIC, SOFTWARE, WEBGL2, SOFTWARE_COMPOSITING, XWAYLAND_COMPOSITING }
 
 internal data class GpuResult(
     val hardware: Boolean,
@@ -36,6 +40,7 @@ internal data class GpuResult(
     val webGl2Only: Boolean = false,
     val bgraTextureVerified: Boolean = false,
     val softwareCompositor: ChromiumBackend? = null,
+    val xwaylandCompositor: ChromiumBackend? = null,
 )
 
 internal class GraphicsAcceleration(private val context: Context) {
@@ -56,15 +61,19 @@ internal class GraphicsAcceleration(private val context: Context) {
         val detail = preferences.getString("${path.platform}.detail", null) ?: return null
         val hardware = preferences.getBoolean("${path.platform}.hardware", false)
         val chromiumBackend = if (path == GpuPath.CHROMIUM) {
-            ChromiumBackend.entries.firstOrNull { it.name == preferences.getString("chromium.backend", null) }
+            loadChromiumBackend("chromium.backend")
         } else null
         if (path == GpuPath.CHROMIUM && hardware && chromiumBackend == null) return null
         return GpuResult(hardware, detail, chromiumBackend,
             path == GpuPath.CHROMIUM && preferences.getBoolean("chromium.webgl2-only", false),
             preferences.getBoolean("${path.platform}.bgra-texture", false),
-            if (path == GpuPath.CHROMIUM) ChromiumBackend.entries.firstOrNull {
-                it.name == preferences.getString("chromium.software-compositor", null)
-            } else null)
+            if (path == GpuPath.CHROMIUM) loadChromiumBackend("chromium.software-compositor") else null,
+            if (path == GpuPath.CHROMIUM) loadChromiumBackend("chromium.xwayland-compositor") else null)
+    }
+
+    private fun loadChromiumBackend(key: String): ChromiumBackend? {
+        val stored = preferences.getString(key, null)
+        return ChromiumBackend.entries.firstOrNull { it.name == stored }
     }
 
     fun result(path: GpuPath) = results[path]
@@ -80,7 +89,8 @@ internal class GraphicsAcceleration(private val context: Context) {
         results = results + (GpuPath.CHROMIUM to null)
         preferences.edit().putString("chromium.binary", key)
             .remove("chromium.hardware").remove("chromium.detail").remove("chromium.backend")
-            .remove("chromium.webgl2-only").remove("chromium.software-compositor").apply()
+            .remove("chromium.webgl2-only").remove("chromium.software-compositor")
+            .remove("chromium.xwayland-compositor").apply()
     }
 
     fun record(path: GpuPath, result: GpuResult) {
@@ -93,6 +103,7 @@ internal class GraphicsAcceleration(private val context: Context) {
                 if (path == GpuPath.CHROMIUM) {
                     putString("chromium.backend", result.chromiumBackend?.name)
                     putString("chromium.software-compositor", result.softwareCompositor?.name)
+                    putString("chromium.xwayland-compositor", result.xwaylandCompositor?.name)
                     putBoolean("chromium.webgl2-only", result.webGl2Only)
                 }
             }.apply()
@@ -110,11 +121,16 @@ internal class GraphicsAcceleration(private val context: Context) {
             preferences.getString("chromium.binary", null) != chromiumKey(binary)) return null
         val result = result(GpuPath.CHROMIUM) ?: return null
         if (result.webGl2Only && rendering != ChromiumRendering.WEBGL2) return null
-        val selected = result.chromiumBackend?.takeIf(::canProbeChromium)
-        val softwareCompositor = result.softwareCompositor?.takeIf(::canProbeChromium)
-        return if (rendering == ChromiumRendering.SOFTWARE_COMPOSITING && selected?.gpuCompositing == true) {
-            softwareCompositor
-        } else selected ?: softwareCompositor
+        val primary = result.chromiumBackend
+        val candidates = when (rendering) {
+            ChromiumRendering.XWAYLAND_COMPOSITING ->
+                listOfNotNull(result.xwaylandCompositor, primary?.takeIf { it.gpuCompositing && it.display == GpuPath.X11 },
+                    result.softwareCompositor)
+            ChromiumRendering.SOFTWARE_COMPOSITING ->
+                listOfNotNull(result.softwareCompositor, primary?.takeUnless { it.gpuCompositing })
+            else -> listOfNotNull(primary, result.xwaylandCompositor, result.softwareCompositor)
+        }
+        return candidates.firstOrNull(::canProbeChromium)
     }
 
     private fun chromiumKey(binary: File) = "${binary.lastModified()}:${binary.length()}"

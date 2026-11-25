@@ -1,0 +1,23 @@
+--- a/hybris/egl/egl.c
++++ b/hybris/egl/egl.c
+@@ -227,6 +227,20 @@
+ 	// variable warning.
+ 	(void) attrib_list;
+ 
++#ifdef WANT_WAYLAND
++	/* Chromium's in-process GPU passes a Wayland display under ANGLE's GBM
++	 * platform. Open a Wayland connection without consuming the opaque
++	 * handle. The plugin uses the wl_egl_window's connection for buffers. */
++	if (platform == EGL_PLATFORM_GBM_KHR && display_id && chromiumOffscreenEnabled() &&
++	    strcmp(_defaultEglPlatform(), "wayland") == 0) {
++		const char *enabled = getenv("MOBILE_TERMINAL_CHROMIUM_WAYLAND_COMPOSITING");
++		if (enabled && strcmp(enabled, "1") == 0) {
++			platform = EGL_PLATFORM_WAYLAND_KHR;
++			display_id = NULL;
++		}
++	}
++#endif
++
+ 	HYBRIS_DLSYSM(egl, &_eglGetDisplay, "eglGetDisplay");
+ 
+ 	if (!_eglGetDisplay) {

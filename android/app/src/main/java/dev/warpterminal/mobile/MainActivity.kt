@@ -264,7 +264,13 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
                             openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.WEBGL2)
                         }) { Text("WebGL 2 硬件启动") }
                     }
-                    if (result?.softwareCompositor != null) {
+                    if (result?.xwaylandCompositor?.let(gpu::canProbeChromium) == true) {
+                        TextButton(onClick = {
+                            confirmChromium = null
+                            openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.XWAYLAND_COMPOSITING)
+                        }) { Text("XWayland 硬件合成") }
+                    }
+                    if (result?.softwareCompositor?.let(gpu::canProbeChromium) == true) {
                         TextButton(onClick = {
                             confirmChromium = null
                             openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.SOFTWARE_COMPOSITING)
