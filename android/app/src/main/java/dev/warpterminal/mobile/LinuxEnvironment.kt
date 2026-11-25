@@ -209,9 +209,9 @@ internal class LinuxEnvironment(private val context: Context) {
         if (backend == null) {
             args.add("--disable-gpu")
         } else {
-            // The Android driver renders offscreen. TAWC presents the page through shared memory.
-            args.addAll(listOf("--use-gl=angle", "--disable-gpu-compositing", "--disable-software-rasterizer",
+            args.addAll(listOf("--use-gl=angle", "--disable-software-rasterizer",
                 if (backend.display == GpuPath.WAYLAND) "--use-angle=gles" else "--use-angle=gles-egl"))
+            if (!backend.gpuCompositing) args.add("--disable-gpu-compositing")
             if (backend.nativeBgra) args.add("--disable-angle-features=bgraTexImageFormatsBroken")
         }
         args.add(page)
@@ -259,6 +259,7 @@ internal class LinuxEnvironment(private val context: Context) {
                 "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/lib/hybris/10-mobile-terminal.json",
             ))
             if (chromiumBackend != null) args.add("MOBILE_TERMINAL_CHROMIUM_EGL=1")
+            if (chromiumBackend?.gpuCompositing == true) args.add("MOBILE_TERMINAL_CHROMIUM_X11_COMPOSITING=1")
         }
         if (activation != null) args.addAll(listOf("XDG_ACTIVATION_TOKEN=$activation", "DESKTOP_STARTUP_ID=$activation"))
         args.addAll(command)

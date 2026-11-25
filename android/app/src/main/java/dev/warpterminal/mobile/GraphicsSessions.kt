@@ -73,9 +73,11 @@ internal class GraphicsSessions(
         var firstFrame = false
         var title = ""
         var webGlPixels = false
+        var visibleColors = 0
 
-        fun webGlFinished() = firstFrame &&
-            (title.contains("WebGL FAIL ") || (webGlPixels && title.isNotEmpty()))
+        fun webGlFinished(gpuCompositing: Boolean) = firstFrame &&
+            (title.contains("WebGL FAIL ") ||
+                (webGlPixels && title.isNotEmpty() && (!gpuCompositing || visibleColors == 3)))
     }
 
     suspend fun prepare() = preparation.withLock {
@@ -224,21 +226,36 @@ internal class GraphicsSessions(
     private suspend fun checkChromiumGpu(): GpuResult {
         val failures = mutableListOf<String>()
         var webGl2: GpuResult? = null
-        for (backend in ChromiumBackend.entries) {
+        var software: GpuResult? = null
+        for (backend in ChromiumBackend.entries.filterNot { it.gpuCompositing }) {
             if (!acceleration.canProbeChromium(backend)) continue
             val result = checkGpu(GpuPath.CHROMIUM, backend)
             val display = if (backend.display == GpuPath.X11) "XWayland" else "Wayland"
             if (result.hardware) {
                 val detected = result.copy(detail = "$display · ${result.detail}", chromiumBackend = backend)
-                if (!detected.webGl2Only) return detected
+                if (!detected.webGl2Only) {
+                    software = detected.copy(detail = "$display · 软件合成 · ${result.detail}")
+                    break
+                }
                 if (!backend.nativeBgra && webGl2 == null) webGl2 = detected
             } else failures.add("$display${if (backend.nativeBgra) " BGRA" else ""} · ${result.detail}")
         }
-        return webGl2 ?: GpuResult(false, failures.joinToString("；").ifEmpty { "需要通过 Wayland 或 X11 EGL 检测" })
+        for (backend in ChromiumBackend.entries.filter { it.gpuCompositing }) {
+            if (!acceleration.canProbeChromium(backend)) continue
+            val result = checkGpu(GpuPath.CHROMIUM, backend)
+            if (result.hardware && !result.webGl2Only) {
+                return result.copy(detail = "XWayland · 硬件合成 · ${result.detail}",
+                    chromiumBackend = backend, softwareCompositor = software?.chromiumBackend)
+            }
+            Log.i("WarpGraphics", "Chromium XWayland GPU compositing: ${result.detail}")
+        }
+        return software ?: webGl2 ?:
+            GpuResult(false, failures.joinToString("；").ifEmpty { "需要通过 Wayland 或 X11 EGL 检测" })
     }
 
     private suspend fun checkGpu(path: GpuPath, chromiumBackend: ChromiumBackend? = null): GpuResult {
         val chromium = chromiumBackend != null
+        val gpuCompositing = chromiumBackend?.gpuCompositing == true
         val id = UUID.randomUUID().toString()
         val window = ProbeWindow(id)
         val appId = if (chromium) "mobile-terminal-webgl-probe" else "mobile-terminal-egl-probe"
@@ -253,7 +270,13 @@ internal class GraphicsSessions(
                 ?: return GpuResult(false, "合成器未响应")
             reader.setOnImageAvailableListener({ receiver ->
                 receiver.acquireLatestImage()?.use { frame ->
-                    if (chromium && !window.webGlPixels) window.webGlPixels = hasRedCanvas(frame)
+                    if (chromium && (!window.webGlPixels || (gpuCompositing && window.visibleColors != 3))) {
+                        val colors = canvasColors(frame, gpuCompositing)
+                        if (colors != 0) {
+                            window.webGlPixels = true
+                            window.visibleColors = window.visibleColors or colors
+                        }
+                    }
                 }
             },
                 Handler(Looper.getMainLooper()))
@@ -267,10 +290,11 @@ internal class GraphicsSessions(
             }
             val guest = checkNotNull(process)
             val completed = withTimeoutOrNull(if (chromium) 18000L else 10000L) {
-                while (guest.isAlive && !(chromium && window.webGlFinished())) delay(60)
+                while (guest.isAlive && !(chromium && window.webGlFinished(gpuCompositing))) delay(60)
                 true
             } ?: false
             if (chromium) {
+                val imports = if (gpuCompositing) withContext(Dispatchers.IO) { hardwareImports() } else null
                 val failure = withContext(Dispatchers.IO) {
                     output.useLines { lines ->
                         lines.take(300).mapNotNull { line ->
@@ -288,6 +312,9 @@ internal class GraphicsSessions(
                 val renderer = window.title.substringAfter(prefix, "").substringBeforeLast(" - Chromium").take(160)
                 val detail = if (webGl2Only) "WebGL 2 可用，WebGL 1 失败 · $renderer" else "WebGL 1 和 2 可用 · $renderer"
                 return when {
+                    gpuCompositing && (!completed || window.visibleColors != 3 || before == null ||
+                        imports == null || imports <= before) ->
+                        GpuResult(false, failure ?: "硬件合成未显示两帧 WebGL 画面")
                     guest.isAlive && window.firstFrame && window.webGlPixels && renderer.contains("Adreno", ignoreCase = true) ->
                         GpuResult(true, detail, webGl2Only = webGl2Only)
                     window.title.contains("WebGL FAIL context lost") -> GpuResult(false, "WebGL 上下文丢失")
@@ -350,22 +377,32 @@ internal class GraphicsSessions(
     private fun hardwareImports(): Long? = NativeBridge.nativeQueryState()?.split(' ')
         ?.firstOrNull { it.startsWith("wlegl_import_texture_total=") }?.substringAfter('=')?.toLongOrNull()
 
-    private fun hasRedCanvas(frame: Image): Boolean {
-        val plane = frame.planes.firstOrNull() ?: return false
+    private fun canvasColors(frame: Image, checkAnimation: Boolean): Int {
+        val plane = frame.planes.firstOrNull() ?: return 0
         val bytes = plane.buffer
-        var samples = 0
+        var redSamples = 0
+        var blueSamples = 0
+        var greenSamples = 0
         for (y in 0 until frame.height step 8) {
             for (x in 0 until frame.width step 8) {
                 val offset = y * plane.rowStride + x * plane.pixelStride
                 if (offset + 2 >= bytes.limit()) break
                 val red = bytes.get(offset).toInt() and 255
-                val otherChannelLimit = red * 2 / 5
-                if (red > 165 && (bytes.get(offset + 1).toInt() and 255) < otherChannelLimit &&
-                    (bytes.get(offset + 2).toInt() and 255) < otherChannelLimit && ++samples >= 64) return true
+                val green = bytes.get(offset + 1).toInt() and 255
+                val blue = bytes.get(offset + 2).toInt() and 255
+                if (isCanvasChannel(red, green, blue) && ++redSamples >= 64 && !checkAnimation) return 1
+                if (checkAnimation) {
+                    if (isCanvasChannel(blue, red, green)) blueSamples++
+                    if (isCanvasChannel(green, red, blue)) greenSamples++
+                }
             }
         }
-        return false
+        if (redSamples < 64) return 0
+        return (if (blueSamples >= 64) 1 else 0) or (if (greenSamples >= 64) 2 else 0)
     }
+
+    private fun isCanvasChannel(primary: Int, second: Int, third: Int) =
+        primary > 165 && maxOf(second, third) * 5 < primary * 2
 
     fun firstFrame(id: String) {
         probe?.takeIf { it.id == id }?.firstFrame = true

@@ -248,7 +248,8 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
     }
     confirmChromium?.let { app ->
         val gpu = service.graphics.acceleration
-        val webGl2Only = gpu.automatic && gpu.result(GpuPath.CHROMIUM)?.webGl2Only == true
+        val result = gpu.result(GpuPath.CHROMIUM)?.takeIf { gpu.automatic }
+        val webGl2Only = result?.webGl2Only == true
         AlertDialog(
             onDismissRequest = { confirmChromium = null },
             title = { Text("以兼容模式启动 Chromium？") },
@@ -262,6 +263,12 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
                             confirmChromium = null
                             openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.WEBGL2)
                         }) { Text("WebGL 2 硬件启动") }
+                    }
+                    if (result?.softwareCompositor != null) {
+                        TextButton(onClick = {
+                            confirmChromium = null
+                            openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.SOFTWARE_COMPOSITING)
+                        }) { Text("软件合成（保留 WebGL 加速）") }
                     }
                 }
             },

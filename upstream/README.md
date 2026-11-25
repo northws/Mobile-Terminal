@@ -17,3 +17,4 @@ Android 首次安装下载的 Debian 镜像必须与锁定的 SHA-256 一致。�
 - `tawc-libtool.patch` 适配新版 Libtool 移除的宏。Bionic 使用 ELF 的无前缀 C 符号。通过 XWayland 全量交叉编译验证。
 - `tawc-libhybris.patch` 让 Debian 构建复用 XWayland 依赖中锁定的私有 Wayland EGL 头文件，并在头文件路径变动时刷新配置。通过 ARM64 交叉编译验证。
 - `libhybris-chromium-egl.patch` 为 Chromium 的硬件探测和启动提供 Android 离屏 EGL 显示。ANGLE 会在缺少 DRM render node 时传入空的 GBM 设备句柄。补丁仅在 Chromium 启动器启用此适配时接受该请求，并通过 `eglGetProcAddress` 返回桥接库的扩展查询和签名匹配的 EXT 入口。
+- `libhybris-chromium-x11-compositing.patch` 让 ANGLE 通过 libhybris 查询 X11 的 EGL visual。Chromium 硬件合成模式会选择与 XWayland 合成窗口匹配的 ARGB8888 visual。窗口桥接失败时返回 EGL 错误，让 Chromium 可以回退。通过 `chrome://gpu`、TAWC 标签的动态图像以及 WebGL 1 和 2 像素读回验证。[Chromium X11 visual 选择](https://chromium.googlesource.com/chromium/src/+/main/ui/gfx/x/visual_manager.cc)

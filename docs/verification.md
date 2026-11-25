@@ -1,5 +1,23 @@
 # Mobile Terminal 验证记录
 
+## 0.2.10 Chromium 页面硬件合成
+
+2026-11-25 在荣耀 MagicPad3 Pro 13.3（YLP-W00、ARM64、Android 17、Adreno 840）通过 USB ADB 测试 Debian Chromium `156.0.8078.108-1~deb13u1`。Qualcomm 驱动为 `0842.53`。
+
+直接开启 Chromium GPU 合成时，XWayland 报告 `No suitable EGL configs found for initialization`，Wayland 则回退到软件合成。XWayland 补丁让 ANGLE 通过 libhybris 查询到 Chromium 窗口使用的 ARGB8888 visual，由 TAWC 的 XWayland EGL 插件提交 Android 硬件缓冲区。应用仅在完整通过 WebGL、实际窗口颜色变化和硬件缓冲区导入检查后启用这条路径。[Chromium 的 X11 EGL 窗口实现](https://chromium.googlesource.com/chromium/src/+/main/ui/gl/gl_surface_egl_x11.cc)
+
+| 场景 | ARM64 真机结果 |
+|---|---|
+| 硬件合成 | 从「图形应用 → Chromium → 兼容启动」打开。图形标签正常显示页面和测试画布。`chrome://gpu` 显示 `Compositing: Hardware accelerated` 与 `WebGL: Hardware accelerated`，渲染器为 `ANGLE (Qualcomm, Adreno (TM) 840, OpenGL ES 3.2)`。 |
+| WebGL 1 与 2 | 两份着色器各绘制两帧，分别通过 `readPixels` 读到 RGBA `[0,0,255,255]` 和 `[0,255,0,255]`。 |
+| 离线冷启动 | 飞行模式开启且 Wi-Fi 关闭后，强制停止 Mobile Terminal，再从菜单启动 Chromium。页面合成保持硬件加速，两个 API 的像素读回与在线一致。测试后恢复原网络设置。 |
+| 软件合成回退 | 从确认框选择「软件合成（保留 WebGL 加速）」。`chrome://gpu` 显示软件合成，WebGL 仍报告 Adreno 840，两个 API 的读回均正确。 |
+| 覆盖安装 | 从 0.2.9 升级后，Debian 主目录测试文件的 SHA-256 保持为 `5e4a6713ee2ab7471c64b3460031b2c2d9faf599006d2bd89bec0eacea594124`。 |
+
+0.2.10 ARM64 调试 APK（versionCode 12）已通过 APK v2 签名检查。交付文件和平板上已安装的 APK 的 SHA-256 均为 `b3739294f05637d1996245ac06d9184552289c27ea936132efdfcee89be19d9a`。主机通过两项 Rust 测试、真实 Bash PTY 回放和五项 Android JVM 测试。六项 Android 真机自动回归通过，包括模拟 XWayland 检测失败后自动选择保留 WebGL 加速的软件合成路径。
+
+本地验收附件包括[离线 GPU 截图](../build/compositing-offline-gpu.png)、[离线 WebGL 测试页](../build/compositing-offline-webgl.png)、[离线读回记录](../build/compositing-offline-session.txt)和[软件合成 GPU 截图](../build/compositing-software-gpu.png)。
+
 ## 0.2.9 Chromium WebGL 1 与 WebGL 2
 
 2026-11-25 通过 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00、Android 17、ARM64、Adreno 840）验证。Debian Chromium 为 `156.0.8078.108-1~deb13u1`，Qualcomm 驱动为 `0842.53`。

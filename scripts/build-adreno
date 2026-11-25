@@ -6,10 +6,12 @@ source_dir="$(cd "$(dirname "$0")/../graphics" && pwd)"
 cd "$tawc"
 
 bash scripts/ensure-deps.sh libhybris
-patch_file="$source_dir/../upstream/libhybris-chromium-egl.patch"
-if ! git -C deps/libhybris apply --reverse --check "$patch_file" 2>/dev/null; then
-    git -C deps/libhybris apply "$patch_file"
-fi
+for patch in libhybris-chromium-egl libhybris-chromium-x11-compositing; do
+    patch_file="$source_dir/../upstream/$patch.patch"
+    if ! git -C deps/libhybris apply --reverse --check "$patch_file" 2>/dev/null; then
+        git -C deps/libhybris apply "$patch_file"
+    fi
+done
 
 # Debian omits this private header from libwayland-dev. Use the Wayland
 # sources already pinned and fetched by the Xwayland build.

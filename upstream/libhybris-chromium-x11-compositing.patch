@@ -1,0 +1,107 @@
+--- a/hybris/egl/egl.c
++++ b/hybris/egl/egl.c
+@@ -379,6 +379,10 @@
+ 	HYBRIS_TRACE_BEGIN("hybris-egl", "eglCreateWindowSurface", "");
+ 	struct _EGLDisplay *display = hybris_egl_display_get_mapping(dpy);
+ 	win = ws_CreateWindow(win, display);
++	if (!win) {
++		__eglHybrisSetError(EGL_BAD_NATIVE_WINDOW);
++		return EGL_NO_SURFACE;
++	}
+ 
+ 	assert(((struct ANativeWindow *) win)->common.magic == ANDROID_NATIVE_WINDOW_MAGIC);
+ 
+@@ -717,6 +721,7 @@
+ 	OVERRIDE_SAMENAME(eglGetPlatformDisplay),
+ 	OVERRIDE_SAMENAME(eglInitialize),
+ 	OVERRIDE_SAMENAME(eglTerminate),
++	OVERRIDE_SAMENAME(eglGetConfigAttrib),
+ 	OVERRIDE_SAMENAME(eglCreateWindowSurface),
+ 	OVERRIDE_SAMENAME(eglCreatePlatformWindowSurface),
+ 	OVERRIDE_SAMENAME(eglCreatePlatformPixmapSurface),
+--- a/hybris/egl/platforms/x11/eglplatform_x11.cpp
++++ b/hybris/egl/platforms/x11/eglplatform_x11.cpp
+@@ -32,6 +32,7 @@
+ 
+ extern "C" {
+ #include <X11/Xlib.h>
++#include <X11/Xutil.h>
+ #include <X11/Xlib-xcb.h>
+ #include <xcb/xcb.h>
+ #include <xcb/xcbext.h>
+@@ -56,17 +57,43 @@
+      * SelectInput/XGE events exist. Gates both the wire shape and the
+      * event-driven buffer lifecycle in X11NativeWindow. */
+     bool tawc_dri_v03;
+-    /* Cached at GetDisplay so eglGetConfigAttrib(EGL_NATIVE_VISUAL_ID)
+-     * can return immediately. The screen's default visual is a 32-bit
+-     * TrueColor on every modern X server (Xwayland included), which
+-     * matches the RGBA8888 EGLConfig clients ask for. */
+-    uint32_t default_visual_id;
++    /* Cached at GetDisplay for eglGetConfigAttrib(EGL_NATIVE_VISUAL_ID). */
++    VisualID window_visual_id;
+ };
+ 
+ extern "C" void x11ws_init_module(struct ws_egl_interface *egl_iface)
+ {
+     hybris_gralloc_initialize(0);
+     eglplatformcommon_init(egl_iface);
++}
++
++/* Chromium asks for the compositor's 32-bit ARGB visual when available.
++ * Match its selection of the lowest ID with the standard ARGB8888 masks. */
++static VisualID chromium_argb_visual(Display *dpy, int screen)
++{
++    char atom_name[32];
++    snprintf(atom_name, sizeof(atom_name), "_NET_WM_CM_S%d", screen);
++    Atom compositor = XInternAtom(dpy, atom_name, True);
++    if (compositor == None || XGetSelectionOwner(dpy, compositor) == None)
++        return None;
++
++    XVisualInfo criteria = {};
++    criteria.screen = screen;
++    criteria.depth = 32;
++    criteria.red_mask = 0xff0000;
++    criteria.green_mask = 0x00ff00;
++    criteria.blue_mask = 0x0000ff;
++    int count = 0;
++    XVisualInfo *infos = XGetVisualInfo(dpy,
++        VisualScreenMask | VisualDepthMask | VisualRedMaskMask | VisualGreenMaskMask | VisualBlueMaskMask,
++        &criteria, &count);
++    VisualID selected = None;
++    for (int i = 0; i < count; ++i) {
++        if (selected == None || infos[i].visualid < selected)
++            selected = infos[i].visualid;
++    }
++    if (infos) XFree(infos);
++    return selected;
+ }
+ 
+ extern "C" _EGLDisplay *x11ws_GetDisplay(EGLNativeDisplayType display)
+@@ -98,8 +125,12 @@
+         return NULL;
+     }
+     int scr = DefaultScreen(xdisp->xdpy);
+-    xdisp->default_visual_id =
+-        (uint32_t)XVisualIDFromVisual(DefaultVisual(xdisp->xdpy, scr));
++    xdisp->window_visual_id = XVisualIDFromVisual(DefaultVisual(xdisp->xdpy, scr));
++    const char *chromium = getenv("MOBILE_TERMINAL_CHROMIUM_X11_COMPOSITING");
++    if (chromium && strcmp(chromium, "1") == 0) {
++        VisualID argb = chromium_argb_visual(xdisp->xdpy, scr);
++        if (argb != None) xdisp->window_visual_id = argb;
++    }
+     return &xdisp->base;
+ }
+ 
+@@ -111,9 +142,9 @@
+     if (attribute != EGL_NATIVE_VISUAL_ID)
+         return EGL_FALSE;
+     X11Display *xdisp = (X11Display *)dpy;
+-    if (!xdisp || !xdisp->default_visual_id)
++    if (!xdisp || !xdisp->window_visual_id)
+         return EGL_FALSE;
+-    *out_value = (EGLint)xdisp->default_visual_id;
++    *out_value = (EGLint)xdisp->window_visual_id;
+     return EGL_TRUE;
+ }
+ 
