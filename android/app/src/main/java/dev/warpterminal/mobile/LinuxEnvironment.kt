@@ -203,13 +203,20 @@ internal class LinuxEnvironment(private val context: Context) {
         }
     }
 
-    private fun chromiumCommand(backend: ChromiumBackend?, profile: String, page: String): Array<String> =
-        arrayOf("/usr/bin/chromium", "--no-sandbox", "--ozone-platform=${backend?.display?.platform ?: "wayland"}",
-            "--no-first-run", "--no-default-browser-check", "--user-data-dir=$profile") +
-            // The Android driver can render offscreen, while TAWC presents Chromium's page through shared memory.
-            (if (backend != null) arrayOf("--use-gl=angle", "--disable-gpu-compositing", "--disable-software-rasterizer",
-                if (backend == ChromiumBackend.WAYLAND) "--use-angle=gles" else "--use-angle=gles-egl")
-            else arrayOf("--disable-gpu")) + page
+    private fun chromiumCommand(backend: ChromiumBackend?, profile: String, page: String): Array<String> {
+        val args = mutableListOf("/usr/bin/chromium", "--no-sandbox", "--ozone-platform=${backend?.display?.platform ?: "wayland"}",
+            "--no-first-run", "--no-default-browser-check", "--user-data-dir=$profile")
+        if (backend == null) {
+            args.add("--disable-gpu")
+        } else {
+            // The Android driver renders offscreen. TAWC presents the page through shared memory.
+            args.addAll(listOf("--use-gl=angle", "--disable-gpu-compositing", "--disable-software-rasterizer",
+                if (backend.display == GpuPath.WAYLAND) "--use-angle=gles" else "--use-angle=gles-egl"))
+            if (backend.nativeBgra) args.add("--disable-angle-features=bgraTexImageFormatsBroken")
+        }
+        args.add(page)
+        return args.toTypedArray()
+    }
 
     private fun guest(
         root: File,

@@ -22,6 +22,9 @@ function testWebGl(api) {
     if (!/adreno/i.test(renderer) || /swiftshader|llvmpipe|software/i.test(renderer)) {
         return fail(renderer || 'renderer unavailable');
     }
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+        return fail('incomplete drawing buffer');
+    }
 
     const program = gl.createProgram();
     const isWebGl2 = api === 'webgl2';
@@ -85,8 +88,13 @@ function testWebGl(api) {
 const webgl = testWebGl('webgl');
 const webgl2 = testWebGl('webgl2');
 window.webglResult = {webgl, webgl2};
-const status = webgl.ok ? 'OK' : webgl2.ok ? 'WEBGL2' : 'FAIL';
-const detail = webgl.ok ? webgl.detail : webgl2.ok ? webgl2.detail : webgl.detail;
+const status = webgl.ok && webgl2.ok ? 'OK' : webgl2.ok ? 'WEBGL2' : 'FAIL';
+const detail = webgl.ok || webgl2.ok ? webgl2.detail : webgl.detail;
 document.title = result.textContent = 'Mobile Terminal WebGL ' + status + ' ' + detail;
+for (const [name, test] of [['WebGL 1', webgl], ['WebGL 2', webgl2]]) {
+    const line = document.createElement('p');
+    line.textContent = name + ' · ' + (test.ok ? 'RGBA ' + JSON.stringify(test.pixels) : test.detail);
+    result.after(line);
+}
 </script>
 </html>

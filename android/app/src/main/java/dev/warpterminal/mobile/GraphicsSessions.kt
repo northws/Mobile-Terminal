@@ -225,14 +225,14 @@ internal class GraphicsSessions(
         val failures = mutableListOf<String>()
         var webGl2: GpuResult? = null
         for (backend in ChromiumBackend.entries) {
-            if (acceleration.backend(backend.display) == null) continue
+            if (!acceleration.canProbeChromium(backend)) continue
             val result = checkGpu(GpuPath.CHROMIUM, backend)
-            val display = if (backend == ChromiumBackend.XWAYLAND) "XWayland" else "Wayland"
+            val display = if (backend.display == GpuPath.X11) "XWayland" else "Wayland"
             if (result.hardware) {
                 val detected = result.copy(detail = "$display · ${result.detail}", chromiumBackend = backend)
                 if (!detected.webGl2Only) return detected
-                if (webGl2 == null) webGl2 = detected
-            } else failures.add("$display · ${result.detail}")
+                if (!backend.nativeBgra && webGl2 == null) webGl2 = detected
+            } else failures.add("$display${if (backend.nativeBgra) " BGRA" else ""} · ${result.detail}")
         }
         return webGl2 ?: GpuResult(false, failures.joinToString("；").ifEmpty { "需要通过 Wayland 或 X11 EGL 检测" })
     }
@@ -286,7 +286,7 @@ internal class GraphicsSessions(
                 val webGl2Only = window.title.contains("Mobile Terminal WebGL WEBGL2 ")
                 val prefix = if (webGl2Only) "Mobile Terminal WebGL WEBGL2 " else "Mobile Terminal WebGL OK "
                 val renderer = window.title.substringAfter(prefix, "").substringBeforeLast(" - Chromium").take(160)
-                val detail = if (webGl2Only) "WebGL 2 可用，WebGL 1 失败 · $renderer" else renderer
+                val detail = if (webGl2Only) "WebGL 2 可用，WebGL 1 失败 · $renderer" else "WebGL 1 和 2 可用 · $renderer"
                 return when {
                     guest.isAlive && window.firstFrame && window.webGlPixels && renderer.contains("Adreno", ignoreCase = true) ->
                         GpuResult(true, detail, webGl2Only = webGl2Only)
@@ -327,7 +327,7 @@ internal class GraphicsSessions(
                 !window.firstFrame || !report.lineSequence().any { it == "FRAMES=48" } ||
                     before == null || counters == null || counters <= before ->
                     GpuResult(false, "合成器未导入 GPU 画面")
-                else -> GpuResult(true, renderer)
+                else -> GpuResult(true, renderer, bgraTextureVerified = report.lineSequence().any { it == "BGRA8888=1" })
             }
         } finally {
             withContext(NonCancellable + Dispatchers.IO) {

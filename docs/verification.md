@@ -1,5 +1,26 @@
 # Mobile Terminal 验证记录
 
+## 0.2.9 Chromium WebGL 1 与 WebGL 2
+
+2026-11-25 通过 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00、Android 17、ARM64、Adreno 840）验证。Debian Chromium 为 `156.0.8078.108-1~deb13u1`，Qualcomm 驱动为 `0842.53`。
+
+0.2.8 的相同测试页在 WebGL 1 创建绘图缓冲时报告 `GL_INVALID_FRAMEBUFFER_OPERATION: glClear: Framebuffer is incomplete: Attachment is not renderable.`。保持 Chromium、驱动、测试页和其余启动参数相同，仅设置 `--disable-angle-features=bgraTexImageFormatsBroken` 后，ANGLE 的扩展列表出现 `GL_EXT_texture_format_BGRA8888`，两个上下文都能绘制和读回像素。ANGLE 上游按 Qualcomm 驱动类型启用这项兼容处理。[ANGLE OpenGL 后端源码](https://github.com/google/angle/blob/main/src/libANGLE/renderer/gl/renderergl_utils.cpp)
+
+应用先尝试 Chromium 默认参数。仅对原生探针识别出的 Qualcomm Adreno 840 测试 BGRA 方案。探针把 BGRA `[211,87,19,255]` 上传到纹理，绑定帧缓冲并以 RGBA 读回 `[19,87,211,255]`。原生检查通过后，Chromium 还须在同一显示后端通过两种 WebGL 的着色器、窗口及像素检查，兼容启动才会采用该方案。
+
+| 场景 | 真机结果 |
+|---|---|
+| 兼容启动 | 在「图形应用」看到「Wayland · WebGL 1 和 2 可用」。从菜单启动 Chromium，测试页显示两个着色器画布和两组 RGBA 结果。 |
+| WebGL 1 和 2 | 在 Wayland、XWayland 分别使用全新 Chromium 配置。每个 API 在两个后端均依次读到蓝色 `[0,0,255,255]`、绿色 `[0,255,0,255]`。页面报告 `ANGLE (Qualcomm, Adreno (TM) 840, OpenGL ES 3.2)`。 |
+| `chrome://gpu` | WebGL 显示硬件加速并读回（`enabled_readback`），页面合成显示软件绘制（`disabled_software`）。 |
+| 离线冷启动 | 开启飞行模式、关闭 Wi-Fi，强制停止应用，再从图形菜单启动。GPU 报告和本地测试页均可打开。隔离配置复验 Wayland、XWayland，两个 API 的两帧读回值均与在线一致。结束后已恢复原网络设置。 |
+| 软件回退 | 关闭硬件浏览器窗口后选择「软件启动」。`chrome://gpu` 显示软件页面合成、OpenGL 和 WebGL 均关闭。设备自动测试另验证 BGRA 能力检查失败、Chromium 升级和仅 WebGL 2 通过时的回退。 |
+| 覆盖安装 | 从 0.2.8 覆盖安装，主目录测试文件安装前后的 SHA-256 均为 `5e4a6713ee2ab7471c64b3460031b2c2d9faf599006d2bd89bec0eacea594124`。 |
+
+本次 ARM64 调试 APK 为 0.2.9（versionCode 11），已通过 v2 签名检查。APK 和平板上已安装的 `base.apk` 的 SHA-256 均为 `02f8d48b28da8ce5d98fa2b7efc229f289b32182a34dbc2fa9df1cecbb608e53`。主机通过两项 Rust 测试、真实 Bash PTY 回放和五项 Android JVM 测试，平板通过六项 instrumentation 测试。
+
+本地验收附件包括[离线测试页截图](../build/webgl1-offline-test.png)、[离线 GPU 页面](../build/webgl1-offline-gpu.png)、[离线读回记录](../build/webgl1-offline-session.txt)和[软件启动截图](../build/webgl1-software-gpu.png)。
+
 ## 0.2.8 Chromium WebGL
 
 2026-11-25 通过 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00、ARM64、Android 17、Adreno 840）验证 Debian Chromium `156.0.8078.108-1~deb13u1`。Mobile Terminal 0.2.8 的 Android 版本号为 10，最低 API 为 29。

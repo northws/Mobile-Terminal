@@ -2,6 +2,7 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <stdint.h>
@@ -57,6 +58,30 @@ static const struct wl_registry_listener registry_events = { global, removed };
 static const struct xdg_wm_base_listener shell_events = { ping };
 static const struct xdg_surface_listener surface_events = { configure };
 
+static int check_bgra_texture(void)
+{
+    /* Exercise the upload and channel order hidden by ANGLE's Qualcomm workaround. */
+    const GLubyte bgra[] = {211, 87, 19, 255};
+    const GLubyte expected[] = {19, 87, 211, 255};
+    GLubyte pixel[4] = {0};
+    GLuint texture, framebuffer;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_BGRA_EXT, 1, 1, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, bgra);
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &texture);
+    int ok = memcmp(pixel, expected, sizeof(pixel)) == 0;
+    while (glGetError() != GL_NO_ERROR) ok = 0;
+    return ok;
+}
+
 static int draw(EGLDisplay display, EGLNativeWindowType window, long frames)
 {
     if (display == EGL_NO_DISPLAY || !eglInitialize(display, NULL, NULL)) return 12;
@@ -78,6 +103,8 @@ static int draw(EGLDisplay display, EGLNativeWindowType window, long frames)
     const char *renderer = (const char *)glGetString(GL_RENDERER);
     if (!vendor || !renderer) return 15;
     printf("GL_VENDOR=%s\nGL_RENDERER=%s\n", vendor, renderer);
+    if (strcmp(vendor, "Qualcomm") == 0 && strcmp(renderer, "Adreno (TM) 840") == 0)
+        printf("BGRA8888=%d\n", check_bgra_texture());
     fflush(stdout);
     for (long frame = 0; frame < frames; ++frame) {
         glDisable(GL_SCISSOR_TEST);

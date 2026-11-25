@@ -5,7 +5,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -32,6 +34,15 @@ class GraphicsAccelerationTest {
 
             val restored = GraphicsAcceleration(context)
             assertEquals(ChromiumBackend.WAYLAND, restored.chromiumBackend(chromium))
+            assertFalse(restored.canProbeChromium(ChromiumBackend.WAYLAND_BGRA))
+            restored.record(GpuPath.WAYLAND, GpuResult(true, "Adreno (TM) 840", bgraTextureVerified = true))
+            assertTrue(restored.canProbeChromium(ChromiumBackend.WAYLAND_BGRA))
+            assertFalse(restored.canProbeChromium(ChromiumBackend.XWAYLAND_BGRA))
+            restored.record(GpuPath.CHROMIUM, GpuResult(true, "Adreno", ChromiumBackend.WAYLAND_BGRA))
+            assertEquals(ChromiumBackend.WAYLAND_BGRA, GraphicsAcceleration(context).chromiumBackend(chromium))
+            assertNull(restored.chromiumBackend(chromium, ChromiumRendering.SOFTWARE))
+            restored.record(GpuPath.WAYLAND, GpuResult(true, "Adreno", bgraTextureVerified = false))
+            assertNull(restored.chromiumBackend(chromium))
             restored.record(GpuPath.WAYLAND, GpuResult(false, "EGL timeout"))
             assertNull(restored.chromiumBackend(chromium))
             restored.record(GpuPath.X11, GpuResult(true, "Adreno"))
