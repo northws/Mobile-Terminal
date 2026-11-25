@@ -1,5 +1,25 @@
 # Mobile Terminal 验证记录
 
+## 0.2.8 Chromium WebGL
+
+2026-11-25 通过 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00、ARM64、Android 17、Adreno 840）验证 Debian Chromium `156.0.8078.108-1~deb13u1`。Mobile Terminal 0.2.8 的 Android 版本号为 10，最低 API 为 29。
+
+动态载入日志确认 ANGLE 使用了 `/usr/lib/hybris/libEGL.so.1`。补齐扩展查询后，跟踪到 `eglGetPlatformDisplayEXT` 请求 `EGL_PLATFORM_GBM_KHR`（`0x31d7`）并传入空设备句柄。Chromium 的兼容入口把该请求转接到 Android EGL 离屏显示，`eglInitialize` 成功。Chromium 从启动时使用软件页面合成后，避免了启动中切换合成方式导致的 WebGL 上下文丢失。
+
+| 场景 | ARM64 真机结果 |
+|---|---|
+| WebGL 2 | 本地页面执行着色器，右半边在蓝、绿之间切换，`readPixels` 依次返回 RGBA `[0,0,255,255]` 和 `[0,255,0,255]`。页面报告 `ANGLE (Qualcomm, Adreno (TM) 840, OpenGL ES 3.2)`。Wayland 和 XWayland 的独立浏览器配置均获得相同结果。 |
+| `chrome://gpu` | Chromium 报告 Adreno 840、`webgl=enabled_readback`（硬件加速并读回）及 `gpu_compositing=disabled_software`（软件页面合成）。 |
+| WebGL 1 | Wayland 和 XWayland 均无法创建上下文，GPU 日志报告 `GL_INVALID_FRAMEBUFFER_OPERATION`。自动检测选择 Wayland 作为可选的 WebGL 2 硬件路径。兼容启动默认使用软件渲染，检测通过后可手动选择「WebGL 2 硬件启动」。 |
+| 原生 EGL/GLES | 图形菜单重新检测通过。Wayland 和 X11 EGL 探针均报告 Adreno 840，通过各自的像素读回和合成器缓冲区导入检查。 |
+| 软件回退 | 关闭硬件窗口后，分别从「兼容启动」和「软件启动」打开 Chromium，两次均成功显示本地测试页，页面报告 WebGL 上下文不可用。 |
+| 离线冷启动 | 启用飞行模式并关闭 Wi-Fi 后，冷启动 Mobile Terminal，从「WebGL 2 硬件启动」进入 Chromium。再次打开 `chrome://gpu` 和 APK 随附的本地测试页，页面仍报告 Adreno 840，图形标签显示着色器画面。测试结束后恢复网络设置。 |
+| 覆盖安装 | Debian 主目录测试文件在覆盖安装前后的 SHA-256 均为 `5e4a6713ee2ab7471c64b3460031b2c2d9faf599006d2bd89bec0eacea594124`。APK v2 签名通过，安装包和本地 APK 的 SHA-256 均为 `81a67e5b2e9995c89fa374d7ccbe536469809e8b02b741eeeafd6af065f88555`。 |
+
+主机通过两项 Rust 单元测试、Bash PTY 回放及五项 Android JVM 测试。USB ARM64 真机通过六项 instrumentation 测试，包括只通过 WebGL 2 时的默认回退、显式硬件启动和 Chromium 更新后重检。[设备测试日志](../build/chromium-device-test.txt)
+
+[ARM64 APK](../build/mobile-terminal-arm64-debug.apk) · [SHA-256](../build/mobile-terminal-arm64-debug.apk.sha256) · [chrome://gpu 截图](../build/chromium-gpu.png) · [蓝绿动画第 1 帧](../build/chromium-webgl2-1.png) · [第 2 帧](../build/chromium-webgl2-2.png) · [离线截图](../build/chromium-offline.png)
+
 ## 0.2.7 Adreno 图形加速
 
 2026-11-24 使用 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00、ARM64、Android 17、Adreno 840）验证。安装包为 Mobile Terminal 0.2.7（versionCode 9、minSdk 29），通过 APK v2 签名校验。APK 大小 45,171,789 字节，SHA-256 为 `55182ded4b0dcfea330906992719146b452b5c35956c60add71bac580cca5767`。

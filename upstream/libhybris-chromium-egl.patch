@@ -1,0 +1,95 @@
+--- a/hybris/egl/egl.c
++++ b/hybris/egl/egl.c
+@@ -208,6 +208,15 @@
+ 	return egl_platform;
+ }
+ 
++/* Chromium's ANGLE requests a GBM display without a device when Ozone
++ * cannot open a DRM render node. Provide an offscreen Android display for
++ * this explicit opt-in. Actual GBM devices require a GBM driver. */
++static EGLBoolean chromiumOffscreenEnabled(void)
++{
++	const char *enabled = getenv("MOBILE_TERMINAL_CHROMIUM_EGL");
++	return enabled && strcmp(enabled, "1") == 0;
++}
++
+ #ifndef WANT_GLVND
+ static
+ #endif
+@@ -229,6 +238,14 @@
+ 	switch (platform) {
+ 		case EGL_NONE:
+ 			hybris_ws = _defaultEglPlatform();
++			break;
++
++		case EGL_PLATFORM_GBM_KHR:
++			if (!chromiumOffscreenEnabled() || display_id != NULL) {
++				__eglHybrisSetError(EGL_BAD_PARAMETER);
++				return EGL_NO_DISPLAY;
++			}
++			hybris_ws = "null";
+ 			break;
+ 
+ 		case EGL_PLATFORM_ANDROID_KHR:
+@@ -324,9 +341,9 @@
+ 	if (dpy == EGL_NO_DISPLAY && name == EGL_EXTENSIONS) {
+ 		const char *ret = _eglQueryString(dpy, name);
+ 		static char eglextensionsbuf[2048];
+-		snprintf(eglextensionsbuf, 2046, "%s %s", ret,
+-			"EGL_EXT_client_extensions EGL_EXT_platform_wayland EGL_KHR_platform_wayland"
+-		);
++		snprintf(eglextensionsbuf, sizeof(eglextensionsbuf), "%s %s%s", ret ? ret : "",
++			"EGL_EXT_client_extensions EGL_EXT_platform_wayland EGL_KHR_platform_wayland",
++			chromiumOffscreenEnabled() ? " EGL_EXT_platform_base EGL_KHR_platform_gbm" : "");
+ 		ret = eglextensionsbuf;
+ 		return ret;
+ 	}
+@@ -675,6 +692,19 @@
+ 	return EGL_FALSE;
+ }
+ 
++static EGLDisplay _my_eglGetPlatformDisplayEXT(EGLenum platform, void *display_id,
++		const EGLint *attrib_list)
++{
++	/* No platform attributes are currently consumed. The EXT ABI uses
++	 * EGLint attributes, while the EGL 1.5 ABI uses EGLAttrib. */
++	(void)attrib_list;
++	if (platform == EGL_NONE) {
++		__eglHybrisSetError(EGL_BAD_PARAMETER);
++		return EGL_NO_DISPLAY;
++	}
++	return __eglHybrisGetPlatformDisplayCommon(platform, display_id, NULL);
++}
++
+ static struct FuncNamePair _eglHybrisOverrideFunctions[] = {
+ 	OVERRIDE_MY(eglCreateImageKHR),
+ 	OVERRIDE_MY(eglSwapBuffersWithDamageEXT),
+@@ -682,6 +712,7 @@
+ 	OVERRIDE_MY(glEGLImageTargetRenderbufferStorageOES),
+ 	OVERRIDE_MY(eglDestroyImageKHR),
+ 	OVERRIDE_SAMENAME(eglGetError),
++	OVERRIDE_SAMENAME(eglQueryString),
+ 	OVERRIDE_SAMENAME(eglGetDisplay),
+ 	OVERRIDE_SAMENAME(eglGetPlatformDisplay),
+ 	OVERRIDE_SAMENAME(eglInitialize),
+@@ -714,11 +745,6 @@
+ 	 * Nonetheless, we should wrap these functions anyway, as we have to wrap
+ 	 * both eglGetDisplay() and eglCreateWindowSurface().
+ 	 *
+-	 * Note that the signature of eglGetPlatformDisplayEXT() isn't exactly the
+-	 * same as eglGetPlatformDisplay(); the EXT one uses EGLint for attrib_list
+-	 * but non-EXT one uses EGLAttrib (introduced in EGL 1.5). However, because
+-	 * we don't use attrib_list (at the moment), we can simply ignore that.
+-	 * 
+ 	 * eglCreatePlatformWindowSurfaceEXT() can have different schematic from
+ 	 * non-platform version (see the function's body, and also [1]). I don't
+ 	 * know what's up with eglCreatePlatformPixmapSurfaceEXT(); it seems to
+@@ -727,7 +753,7 @@
+ 	 *
+ 	 * [1] https://gitlab.freedesktop.org/glvnd/libglvnd/-/issues/214
+ 	 */
+-	OVERRIDE_TO(eglGetPlatformDisplayEXT, eglGetPlatformDisplay),
++	OVERRIDE_MY(eglGetPlatformDisplayEXT),
+ 	OVERRIDE_MY(eglCreatePlatformWindowSurfaceEXT),
+ 	OVERRIDE_TO(eglCreatePlatformPixmapSurfaceEXT, eglCreatePixmapSurface),
+ 	OVERRIDE_MY(eglQueryDeviceStringEXT),

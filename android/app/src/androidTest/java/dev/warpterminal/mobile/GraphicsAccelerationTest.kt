@@ -5,9 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -27,20 +25,30 @@ class GraphicsAccelerationTest {
             acceleration.checkChromiumVersion(chromium)
             acceleration.record(GpuPath.WAYLAND, GpuResult(true, "Adreno"))
             acceleration.record(GpuPath.X11, GpuResult(false, "EGL timeout"))
-            acceleration.record(GpuPath.CHROMIUM, GpuResult(true, "Adreno"))
+            acceleration.record(GpuPath.CHROMIUM, GpuResult(true, "Adreno", ChromiumBackend.WAYLAND))
             assertEquals(GpuPath.WAYLAND, acceleration.backend(GpuPath.WAYLAND))
             assertNull(acceleration.backend(GpuPath.X11))
-            assertTrue(acceleration.chromiumReady(chromium))
+            assertEquals(ChromiumBackend.WAYLAND, acceleration.chromiumBackend(chromium))
 
             val restored = GraphicsAcceleration(context)
-            assertTrue(restored.chromiumReady(chromium))
+            assertEquals(ChromiumBackend.WAYLAND, restored.chromiumBackend(chromium))
+            restored.record(GpuPath.WAYLAND, GpuResult(false, "EGL timeout"))
+            assertNull(restored.chromiumBackend(chromium))
+            restored.record(GpuPath.X11, GpuResult(true, "Adreno"))
+            restored.record(GpuPath.CHROMIUM, GpuResult(true, "Adreno", ChromiumBackend.XWAYLAND))
+            assertEquals(ChromiumBackend.XWAYLAND, GraphicsAcceleration(context).chromiumBackend(chromium))
+            restored.record(GpuPath.CHROMIUM, GpuResult(true, "Adreno", ChromiumBackend.XWAYLAND, webGl2Only = true))
+            val partial = GraphicsAcceleration(context)
+            assertNull(partial.chromiumBackend(chromium))
+            assertNull(partial.chromiumBackend(chromium, ChromiumRendering.SOFTWARE))
+            assertEquals(ChromiumBackend.XWAYLAND, partial.chromiumBackend(chromium, ChromiumRendering.WEBGL2))
             chromium.writeText("changed")
-            assertFalse(restored.chromiumReady(chromium))
-            assertEquals(GpuPath.WAYLAND, restored.backend(GpuPath.WAYLAND))
+            assertNull(partial.chromiumBackend(chromium, ChromiumRendering.WEBGL2))
+            assertEquals(GpuPath.X11, restored.backend(GpuPath.X11))
 
             restored.setAutomaticMode(false)
-            assertNull(restored.backend(GpuPath.WAYLAND))
-            assertNull(GraphicsAcceleration(context).backend(GpuPath.WAYLAND))
+            assertNull(restored.backend(GpuPath.X11))
+            assertNull(GraphicsAcceleration(context).backend(GpuPath.X11))
         } finally {
             chromium.delete()
             target.deleteSharedPreferences(preferences)

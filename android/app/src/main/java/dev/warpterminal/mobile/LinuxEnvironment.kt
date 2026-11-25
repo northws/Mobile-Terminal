@@ -132,10 +132,14 @@ internal class LinuxEnvironment(private val context: Context) {
         )
     }
 
-    fun launchGraphics(app: LinuxApp, token: String, chromiumCompatibility: Boolean, software: Boolean): Process {
-        val useChromiumGpu = chromiumCompatibility && !software && acceleration.chromiumReady(chromiumBinary)
+    fun launchGraphics(app: LinuxApp, token: String, chromiumCompatibility: Boolean,
+        rendering: ChromiumRendering,
+    ): Process {
+        val chromiumBackend = if (chromiumCompatibility) {
+            acceleration.chromiumBackend(chromiumBinary, rendering)
+        } else null
         val backend = when {
-            chromiumCompatibility -> if (useChromiumGpu) GpuPath.WAYLAND else null
+            chromiumCompatibility -> chromiumBackend?.display
             app.desktopFile == null -> acceleration.backend(GpuPath.X11)
             else -> acceleration.backend(GpuPath.WAYLAND)
         }
@@ -143,7 +147,7 @@ internal class LinuxEnvironment(private val context: Context) {
             chromiumCompatibility -> {
                 check(app.isDebianChromium)
                 if (!File(rootfs, "usr/bin/chromium").canExecute()) throw IOException("Debian 中尚未安装 Chromium")
-                chromiumCommand(useChromiumGpu, "/home/warp/.local/share/mobile-terminal/chromium", "about:blank")
+                chromiumCommand(chromiumBackend, "/home/warp/.local/share/mobile-terminal/chromium", "about:blank")
             }
             app.desktopFile != null -> {
                 if (!File(rootfs, "usr/bin/gio").canExecute()) {
@@ -154,16 +158,23 @@ internal class LinuxEnvironment(private val context: Context) {
             else -> arrayOf("/usr/bin/xeyes")
         }
         return guest(rootfs, "/bin/bash", "-c", "cd \"\$HOME\" && exec \"\$@\"", "warp-launch",
-            *command, graphics = true, activation = token, backend = backend)
+            *command, graphics = true, activation = token, backend = backend, chromiumBackend = chromiumBackend)
             .redirectOutput(File("/dev/null")).redirectError(File("/dev/null"))
             .start().also { it.outputStream.close() }
     }
 
-    fun probeGraphics(path: GpuPath, token: String, profile: File?, output: File): Process {
-        val command = if (profile == null) arrayOf("/usr/lib/hybris/adreno-probe", path.platform) else
-            chromiumCommand(true, "/tmp/${profile.name}", "file:///usr/lib/hybris/webgl.html") +
-                arrayOf("--class=mobile-terminal-webgl-probe", "--disable-background-networking")
-        return guest(rootfs, *command, graphics = true, activation = token, backend = path)
+    fun probeGraphics(path: GpuPath, token: String, workspace: File, output: File,
+        chromiumBackend: ChromiumBackend?,
+    ): Process {
+        val command = if (chromiumBackend == null) {
+            arrayOf("/usr/lib/hybris/adreno-probe", path.platform)
+        } else {
+            chromiumCommand(chromiumBackend, "/tmp/${workspace.name}", "file:///usr/lib/hybris/webgl.html") +
+                arrayOf("--class=mobile-terminal-webgl-probe", "--disable-background-networking",
+                    "--enable-logging=stderr")
+        }
+        return guest(rootfs, *command, graphics = true, activation = token,
+            backend = chromiumBackend?.display ?: path, chromiumBackend = chromiumBackend)
             .redirectErrorStream(true).redirectOutput(output).start().also { it.outputStream.close() }
     }
 
@@ -192,10 +203,12 @@ internal class LinuxEnvironment(private val context: Context) {
         }
     }
 
-    private fun chromiumCommand(hardware: Boolean, profile: String, page: String): Array<String> =
-        arrayOf("/usr/bin/chromium", "--no-sandbox", "--ozone-platform=wayland",
+    private fun chromiumCommand(backend: ChromiumBackend?, profile: String, page: String): Array<String> =
+        arrayOf("/usr/bin/chromium", "--no-sandbox", "--ozone-platform=${backend?.display?.platform ?: "wayland"}",
             "--no-first-run", "--no-default-browser-check", "--user-data-dir=$profile") +
-            (if (hardware) arrayOf("--use-gl=angle", "--use-angle=gles", "--disable-software-rasterizer")
+            // The Android driver can render offscreen, while TAWC presents Chromium's page through shared memory.
+            (if (backend != null) arrayOf("--use-gl=angle", "--disable-gpu-compositing", "--disable-software-rasterizer",
+                if (backend == ChromiumBackend.WAYLAND) "--use-angle=gles" else "--use-angle=gles-egl")
             else arrayOf("--disable-gpu")) + page
 
     private fun guest(
@@ -205,6 +218,7 @@ internal class LinuxEnvironment(private val context: Context) {
         activation: String? = null,
         backend: GpuPath? = acceleration.backend(GpuPath.WAYLAND),
         allowX11Override: Boolean = false,
+        chromiumBackend: ChromiumBackend? = null,
     ): ProcessBuilder {
         val args = mutableListOf(tawcroot.path, "-s", "-r", root.path)
         for (bind in listOf("/dev:/dev", "/proc:/proc", "/sys:/sys", "${home.path}:/home/warp", "${runnerDir.path}:/opt/warp:ro")) {
@@ -229,13 +243,15 @@ internal class LinuxEnvironment(private val context: Context) {
             "LANG=C.UTF-8", "TMPDIR=/tmp", "DEBIAN_FRONTEND=noninteractive"))
         if (display) {
             args.addAll(listOf("WAYLAND_DISPLAY=wayland-0", "DISPLAY=:0",
-                "XDG_RUNTIME_DIR=/usr/share/warp-display", "XDG_SESSION_TYPE=wayland"))
+                "XDG_RUNTIME_DIR=/usr/share/warp-display",
+                "XDG_SESSION_TYPE=${chromiumBackend?.display?.platform ?: "wayland"}"))
             if (backend == null) args.add("LIBGL_ALWAYS_SOFTWARE=1")
             else args.addAll(listOf(
                 "LD_LIBRARY_PATH=/usr/lib/hybris/gl-shims:/usr/lib/hybris",
                 "HYBRIS_EGLPLATFORM=${backend.platform}",
                 "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/lib/hybris/10-mobile-terminal.json",
             ))
+            if (chromiumBackend != null) args.add("MOBILE_TERMINAL_CHROMIUM_EGL=1")
         }
         if (activation != null) args.addAll(listOf("XDG_ACTIVATION_TOKEN=$activation", "DESKTOP_STARTUP_ID=$activation"))
         args.addAll(command)

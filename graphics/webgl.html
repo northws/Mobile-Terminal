@@ -1,32 +1,92 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <meta charset="utf-8">
 <title>Mobile Terminal WebGL pending</title>
-<canvas width="256" height="256"></canvas>
-<p id="result">正在测试 WebGL</p>
+<p id="result">Testing WebGL</p>
 <script>
 const result = document.querySelector('#result');
-const gl = document.querySelector('canvas').getContext('webgl', {
-    failIfMajorPerformanceCaveat: true, preserveDrawingBuffer: true
-});
-function report(status, detail) {
-    document.title = 'Mobile Terminal WebGL ' + status + ' ' + detail;
-    result.textContent = document.title;
-}
-if (!gl) {
-    report('FAIL', 'WebGL unavailable');
-} else {
+function testWebGl(api) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 256;
+    document.body.insertBefore(canvas, result);
+    const gl = canvas.getContext(api, {preserveDrawingBuffer: true});
+    const fail = (detail, pixels = []) => {
+        canvas.remove();
+        return {ok: false, detail, pixels};
+    };
+    if (!gl) {
+        return fail(api + ' unavailable');
+    }
     const debug = gl.getExtension('WEBGL_debug_renderer_info');
     const renderer = debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : '';
-    const pixel = new Uint8Array(4);
-    gl.clearColor(1, 0, 0, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.readPixels(128, 128, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-    if (gl.getError() === gl.NO_ERROR && pixel.join(',') === '255,0,0,255' && /adreno/i.test(renderer)) {
-        report('OK', renderer);
-    } else {
-        report('FAIL', renderer || 'renderer or pixel readback unavailable');
+    if (!/adreno/i.test(renderer) || /swiftshader|llvmpipe|software/i.test(renderer)) {
+        return fail(renderer || 'renderer unavailable');
     }
+
+    const program = gl.createProgram();
+    const isWebGl2 = api === 'webgl2';
+    const header = isWebGl2 ? '#version 300 es\n' : '';
+    const vertexInput = isWebGl2 ? 'in' : 'attribute';
+    const colorOutput = isWebGl2 ? 'color' : 'gl_FragColor';
+    function attach(type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, header + source);
+        gl.compileShader(shader);
+        gl.attachShader(program, shader);
+    }
+    attach(gl.VERTEX_SHADER, `${vertexInput} vec2 position;
+        void main() { gl_Position = vec4(position, 0.0, 1.0); }`);
+    attach(gl.FRAGMENT_SHADER, `precision mediump float;
+        ${isWebGl2 ? 'out vec4 color;' : ''}
+        uniform float phase;
+        void main() {
+            if (gl_FragCoord.x < 128.0) ${colorOutput} = vec4(1.0, 0.0, 0.0, 1.0);
+            else ${colorOutput} = vec4(0.0, phase, 1.0 - phase, 1.0);
+        }`);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        return fail('shader link failed');
+    }
+    gl.useProgram(program);
+    const vertices = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertices);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, 'position');
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    const phase = gl.getUniformLocation(program, 'phase');
+    const pixels = [];
+    function draw(frame) {
+        const green = frame % 2;
+        gl.uniform1f(phase, green);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    for (let frame = 0; frame < 2; frame++) {
+        draw(frame);
+        const pixel = new Uint8Array(4);
+        gl.readPixels(192, 128, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+        pixels.push(Array.from(pixel));
+        if (gl.getError() !== gl.NO_ERROR || pixel.join(',') !== (frame ? '0,255,0,255' : '0,0,255,255')) {
+            return fail('unexpected shader pixel', pixels);
+        }
+    }
+    let frame = 0;
+    function animate() {
+        if (gl.isContextLost()) return;
+        draw(frame++);
+        setTimeout(() => requestAnimationFrame(animate), 350);
+    }
+    canvas.addEventListener('webglcontextlost', () => {
+        document.title = result.textContent = 'Mobile Terminal WebGL FAIL context lost';
+    });
+    requestAnimationFrame(animate);
+    return {ok: true, detail: renderer, pixels};
 }
+const webgl = testWebGl('webgl');
+const webgl2 = testWebGl('webgl2');
+window.webglResult = {webgl, webgl2};
+const status = webgl.ok ? 'OK' : webgl2.ok ? 'WEBGL2' : 'FAIL';
+const detail = webgl.ok ? webgl.detail : webgl2.ok ? webgl2.detail : webgl.detail;
+document.title = result.textContent = 'Mobile Terminal WebGL ' + status + ' ' + detail;
 </script>
 </html>

@@ -196,10 +196,6 @@ internal class GraphicsSessions(
             for (path in GpuPath.entries) {
                 if (path == GpuPath.CHROMIUM && (!checkChromium || !linux.chromiumBinary.canExecute())) continue
                 if (!retry && acceleration.result(path) != null) continue
-                if (path == GpuPath.CHROMIUM && acceleration.result(GpuPath.WAYLAND)?.hardware != true) {
-                    acceleration.record(path, GpuResult(false, "需要通过 Wayland EGL 检测"))
-                    continue
-                }
                 acceleration.running = path
                 try {
                     prepare()
@@ -208,7 +204,7 @@ internal class GraphicsSessions(
                         linux.prepareGpuLinker()
                     }
                     activate()
-                    val result = checkGpu(path)
+                    val result = if (path == GpuPath.CHROMIUM) checkChromiumGpu() else checkGpu(path)
                     Log.i("WarpGraphics", "${path.label}: ${result.detail}")
                     acceleration.record(path, result)
                 } catch (error: CancellationException) {
@@ -225,14 +221,32 @@ internal class GraphicsSessions(
         }.also { gpuCheck = it }
     }
 
-    private suspend fun checkGpu(path: GpuPath): GpuResult {
-        val chromium = path == GpuPath.CHROMIUM
+    private suspend fun checkChromiumGpu(): GpuResult {
+        val failures = mutableListOf<String>()
+        var webGl2: GpuResult? = null
+        for (backend in ChromiumBackend.entries) {
+            if (acceleration.backend(backend.display) == null) continue
+            val result = checkGpu(GpuPath.CHROMIUM, backend)
+            val display = if (backend == ChromiumBackend.XWAYLAND) "XWayland" else "Wayland"
+            if (result.hardware) {
+                val detected = result.copy(detail = "$display · ${result.detail}", chromiumBackend = backend)
+                if (!detected.webGl2Only) return detected
+                if (webGl2 == null) webGl2 = detected
+            } else failures.add("$display · ${result.detail}")
+        }
+        return webGl2 ?: GpuResult(false, failures.joinToString("；").ifEmpty { "需要通过 Wayland 或 X11 EGL 检测" })
+    }
+
+    private suspend fun checkGpu(path: GpuPath, chromiumBackend: ChromiumBackend? = null): GpuResult {
+        val chromium = chromiumBackend != null
         val id = UUID.randomUUID().toString()
         val window = ProbeWindow(id)
         val appId = if (chromium) "mobile-terminal-webgl-probe" else "mobile-terminal-egl-probe"
         var directory: File? = null
         var process: Process? = null
-        val reader = ImageReader.newInstance(768, 512, PixelFormat.RGBA_8888, 3)
+        // The browser toolbar and compatibility banner take part of the surface on high-density screens.
+        val reader = ImageReader.newInstance(if (chromium) 1280 else 768, if (chromium) 960 else 512,
+            PixelFormat.RGBA_8888, 3)
         probe = window
         try {
             val token = withContext(Dispatchers.IO) { NativeBridge.nativeReserveLaunchHost(id, appId, -1) }
@@ -249,26 +263,45 @@ internal class GraphicsSessions(
             val workspace = withContext(Dispatchers.IO) { linux.probeDirectory().also { directory = it } }
             val output = File(workspace, "probe.log")
             withContext(Dispatchers.IO) {
-                process = linux.probeGraphics(if (chromium) GpuPath.WAYLAND else path, token,
-                    workspace.takeIf { chromium }, output)
+                process = linux.probeGraphics(path, token, workspace, output, chromiumBackend)
             }
             val guest = checkNotNull(process)
             val completed = withTimeoutOrNull(if (chromium) 18000L else 10000L) {
                 while (guest.isAlive && !(chromium && window.webGlFinished())) delay(60)
                 true
             } ?: false
-            if (!completed) return GpuResult(false, if (chromium) "等待 WebGL 结果超时" else "EGL 绘制超时")
             if (chromium) {
-                val renderer = window.title.substringAfter("Mobile Terminal WebGL OK ", "")
-                    .substringBeforeLast(" - Chromium").take(160)
+                val failure = withContext(Dispatchers.IO) {
+                    output.useLines { lines ->
+                        lines.take(300).mapNotNull { line ->
+                            when {
+                                "EGL_NOT_INITIALIZED" in line -> "EGL 初始化失败"
+                                "GL_INVALID_FRAMEBUFFER_OPERATION" in line -> "WebGL 帧缓冲不完整"
+                                "Exiting GPU process due to errors" in line -> "GPU 进程初始化失败"
+                                else -> null
+                            }
+                        }.firstOrNull()
+                    }
+                }
+                val webGl2Only = window.title.contains("Mobile Terminal WebGL WEBGL2 ")
+                val prefix = if (webGl2Only) "Mobile Terminal WebGL WEBGL2 " else "Mobile Terminal WebGL OK "
+                val renderer = window.title.substringAfter(prefix, "").substringBeforeLast(" - Chromium").take(160)
+                val detail = if (webGl2Only) "WebGL 2 可用，WebGL 1 失败 · $renderer" else renderer
                 return when {
-                    window.firstFrame && window.webGlPixels && renderer.contains("Adreno", ignoreCase = true) ->
-                        GpuResult(true, renderer)
-                    window.title.contains("WebGL FAIL WebGL unavailable") -> GpuResult(false, "无法建立 WebGL 上下文")
+                    guest.isAlive && window.firstFrame && window.webGlPixels && renderer.contains("Adreno", ignoreCase = true) ->
+                        GpuResult(true, detail, webGl2Only = webGl2Only)
+                    window.title.contains("WebGL FAIL context lost") -> GpuResult(false, "WebGL 上下文丢失")
+                    renderer.isNotEmpty() && !guest.isAlive -> GpuResult(false, "Chromium 探测进程提前退出")
+                    renderer.isNotEmpty() && !window.firstFrame -> GpuResult(false, "未收到 Chromium 窗口首帧")
+                    renderer.isNotEmpty() -> GpuResult(false, "图形标签未显示 WebGL 画面")
+                    failure != null -> GpuResult(false, failure)
+                    !completed -> GpuResult(false, "等待 WebGL 结果超时")
+                    window.title.contains("WebGL FAIL webgl unavailable") -> GpuResult(false, "无法建立 WebGL 上下文")
                     window.title.contains("WebGL FAIL") -> GpuResult(false, "WebGL 未通过 Adreno 绘制或像素读回")
                     else -> GpuResult(false, "Chromium GPU 进程或图形窗口未就绪")
                 }
             }
+            if (!completed) return GpuResult(false, "EGL 绘制超时")
             val counters = withContext(Dispatchers.IO) { hardwareImports() }
             val report = withContext(Dispatchers.IO) {
                 output.bufferedReader().use { source -> CharArray(32768).let { buffer ->
@@ -338,7 +371,7 @@ internal class GraphicsSessions(
         probe?.takeIf { it.id == id }?.firstFrame = true
     }
 
-    fun launchApp(app: LinuxApp, chromiumCompatibility: Boolean, software: Boolean) {
+    fun launchApp(app: LinuxApp, chromiumCompatibility: Boolean, rendering: ChromiumRendering) {
         // One reservation per desktop id avoids ambiguous app_id matching for single-instance apps.
         tabs.firstOrNull { it.pending && it.title == app.name }?.let { selected(it.id); return }
         val tab = GraphicsTab(newId(), UUID.randomUUID().toString(), app.name, true)
@@ -347,7 +380,9 @@ internal class GraphicsSessions(
         changed()
         tab.launcher = scope.launch {
             try {
-                if (!software) detectGraphics(includeChromium = chromiumCompatibility)?.join()
+                if (rendering != ChromiumRendering.SOFTWARE) {
+                    detectGraphics(includeChromium = chromiumCompatibility)?.join()
+                }
                 prepare()
                 activate()
                 val token = withContext(Dispatchers.IO) {
@@ -358,7 +393,7 @@ internal class GraphicsSessions(
                     if (tab.pending) failed(tab, "未收到图形窗口，请检查应用是否已安装及其显示支持。")
                 }
                 val result = withContext(Dispatchers.IO) {
-                    val process = linux.launchGraphics(app, token, chromiumCompatibility, software)
+                    val process = linux.launchGraphics(app, token, chromiumCompatibility, rendering)
                     try {
                         runInterruptible { process.waitFor() }
                     } finally {
@@ -396,7 +431,8 @@ internal class GraphicsSessions(
 
     fun titleChanged(id: String, title: String) {
         probe?.takeIf { it.id == id }?.let {
-            if (title.contains("Mobile Terminal WebGL OK ") || title.contains("Mobile Terminal WebGL FAIL ")) {
+            if ("Mobile Terminal WebGL OK " in title || "Mobile Terminal WebGL FAIL " in title ||
+                "Mobile Terminal WebGL WEBGL2 " in title) {
                 it.title = title
             }
             return

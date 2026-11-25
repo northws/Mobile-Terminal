@@ -14,7 +14,19 @@ internal enum class GpuPath(val platform: String, val label: String) {
     CHROMIUM("chromium", "Chromium WebGL"),
 }
 
-internal data class GpuResult(val hardware: Boolean, val detail: String)
+internal enum class ChromiumBackend(val display: GpuPath) {
+    WAYLAND(GpuPath.WAYLAND),
+    XWAYLAND(GpuPath.X11),
+}
+
+internal enum class ChromiumRendering { AUTOMATIC, SOFTWARE, WEBGL2 }
+
+internal data class GpuResult(
+    val hardware: Boolean,
+    val detail: String,
+    val chromiumBackend: ChromiumBackend? = null,
+    val webGl2Only: Boolean = false,
+)
 
 internal class GraphicsAcceleration(private val context: Context) {
     private val preferences = context.getSharedPreferences("graphics-acceleration", Context.MODE_PRIVATE)
@@ -32,7 +44,13 @@ internal class GraphicsAcceleration(private val context: Context) {
     private fun load(path: GpuPath): GpuResult? {
         if (preferences.getString("${path.platform}.system", null) != systemKey) return null
         val detail = preferences.getString("${path.platform}.detail", null) ?: return null
-        return GpuResult(preferences.getBoolean("${path.platform}.hardware", false), detail)
+        val hardware = preferences.getBoolean("${path.platform}.hardware", false)
+        val chromiumBackend = if (path == GpuPath.CHROMIUM) {
+            ChromiumBackend.entries.firstOrNull { it.name == preferences.getString("chromium.backend", null) }
+        } else null
+        if (path == GpuPath.CHROMIUM && hardware && chromiumBackend == null) return null
+        return GpuResult(hardware, detail, chromiumBackend,
+            path == GpuPath.CHROMIUM && preferences.getBoolean("chromium.webgl2-only", false))
     }
 
     fun result(path: GpuPath) = results[path]
@@ -47,21 +65,33 @@ internal class GraphicsAcceleration(private val context: Context) {
         if (preferences.getString("chromium.binary", null) == key) return
         results = results + (GpuPath.CHROMIUM to null)
         preferences.edit().putString("chromium.binary", key)
-            .remove("chromium.hardware").remove("chromium.detail").apply()
+            .remove("chromium.hardware").remove("chromium.detail").remove("chromium.backend")
+            .remove("chromium.webgl2-only").apply()
     }
 
     fun record(path: GpuPath, result: GpuResult) {
         results = results + (path to result)
         preferences.edit().putString("${path.platform}.system", systemKey)
             .putString("${path.platform}.detail", result.detail)
-            .putBoolean("${path.platform}.hardware", result.hardware).apply()
+            .putBoolean("${path.platform}.hardware", result.hardware)
+            .apply {
+                if (path == GpuPath.CHROMIUM) {
+                    putString("chromium.backend", result.chromiumBackend?.name)
+                    putBoolean("chromium.webgl2-only", result.webGl2Only)
+                }
+            }.apply()
     }
 
     fun backend(path: GpuPath): GpuPath? =
         path.takeIf { automatic && result(path)?.hardware == true }
 
-    fun chromiumReady(binary: File): Boolean = backend(GpuPath.WAYLAND) != null &&
-        backend(GpuPath.CHROMIUM) != null && preferences.getString("chromium.binary", null) == chromiumKey(binary)
+    fun chromiumBackend(binary: File, rendering: ChromiumRendering = ChromiumRendering.AUTOMATIC): ChromiumBackend? {
+        if (rendering == ChromiumRendering.SOFTWARE || backend(GpuPath.CHROMIUM) == null ||
+            preferences.getString("chromium.binary", null) != chromiumKey(binary)) return null
+        val result = result(GpuPath.CHROMIUM) ?: return null
+        if (result.webGl2Only && rendering == ChromiumRendering.AUTOMATIC) return null
+        return result.chromiumBackend?.takeIf { backend(it.display) != null }
+    }
 
     private fun chromiumKey(binary: File) = "${binary.lastModified()}:${binary.length()}"
 

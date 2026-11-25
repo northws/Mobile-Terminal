@@ -141,11 +141,12 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
             .putExtra(TerminalService.APP_NAME, app.name)
             .putExtra(TerminalService.APP_COMMAND, app.command))
     }
-    fun openGraphics(action: String, app: LinuxApp, software: Boolean = false) = start(Intent(action)
+    fun openGraphics(action: String, app: LinuxApp, rendering: ChromiumRendering = ChromiumRendering.AUTOMATIC) =
+        start(Intent(action)
         .putExtra(TerminalService.APP_ID, app.id)
         .putExtra(TerminalService.APP_NAME, app.name)
         .putExtra(TerminalService.APP_FILE, app.desktopFile)
-        .putExtra(TerminalService.SOFTWARE_GRAPHICS, software))
+        .putExtra(TerminalService.CHROMIUM_RENDERING, rendering.name))
     Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -246,10 +247,24 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
             })
     }
     confirmChromium?.let { app ->
+        val gpu = service.graphics.acceleration
+        val webGl2Only = gpu.automatic && gpu.result(GpuPath.CHROMIUM)?.webGl2Only == true
         AlertDialog(
             onDismissRequest = { confirmChromium = null },
             title = { Text("以兼容模式启动 Chromium？") },
-            text = { Text("此 Linux 环境无法启用 Chromium 的沙箱。兼容模式会关闭 Chromium 沙箱，使用独立的浏览器配置。请只打开可信页面。") },
+            text = {
+                Column {
+                    Text("此 Linux 环境无法启用 Chromium 的沙箱。兼容模式会关闭 Chromium 沙箱，使用独立的浏览器配置。请只打开可信页面。")
+                    if (webGl2Only) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Adreno 已通过 WebGL 2 检测。WebGL 1 仍无法使用。")
+                        TextButton(onClick = {
+                            confirmChromium = null
+                            openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.WEBGL2)
+                        }) { Text("WebGL 2 硬件启动") }
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmChromium = null
@@ -261,7 +276,7 @@ private fun TerminalHome(service: TerminalService, start: (Intent) -> Unit) {
                     TextButton(onClick = { confirmChromium = null }) { Text("取消") }
                     TextButton(onClick = {
                         confirmChromium = null
-                        openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, software = true)
+                        openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.SOFTWARE)
                     }) { Text("软件启动") }
                 }
             },
