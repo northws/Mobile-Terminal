@@ -1,0 +1,101 @@
+diff --git a/tawcroot/src/exec_handler.c b/tawcroot/src/exec_handler.c
+--- a/tawcroot/src/exec_handler.c
++++ b/tawcroot/src/exec_handler.c
+@@ -68,6 +68,26 @@
+ 	return 0;
+ }
+ 
++
++/* Honor the Debian sudo executable's setuid mode in the guest view.
++ * Check the opened file's resolved path, so host binds and lookalikes
++ * elsewhere in the filesystem do not acquire a virtual root identity.
++ * Android's real IDs and no_new_privs are untouched. */
++static int probe_debian_sudo(int fd)
++{
++	if (tawcroot_rootfs_fd < 0 || tawcroot_rootfs_host_path_len == 0)
++		return 0;
++	static char path[4096]; /* caller holds exec_lock */
++	long len = tawcroot_proc_fd_to_host_path(fd, path, sizeof path);
++	if (len <= (long)tawcroot_rootfs_host_path_len ||
++	    !tawc_starts_with(path, tawcroot_rootfs_host_path) ||
++	    !tawc_streq(path + tawcroot_rootfs_host_path_len, "/usr/bin/sudo"))
++		return 0;
++	struct statx stx;
++	const unsigned int setuid_bit = 04000;
++	return tawc_statx(fd, "", AT_EMPTY_PATH, STATX_MODE, &stx) == 0 &&
++	       (stx.stx_mode & setuid_bit) != 0;
++}
+ 
+ /* Require the file at `fd` to parse as an ET_EXEC/ET_DYN ELF for this
+  * machine. A wrong-arch / malformed / too-short file is -ENOEXEC, which
+@@ -321,6 +341,7 @@
+ 			                             argv_off) + 1;
+ 		r = classify_loadable((int)probe, 0, &sa);
+ 	}
++	int debian_sudo = r == 0 && sa.extra == 0 && probe_debian_sudo((int)probe);
+ 	tawc_close((int)probe);
+ 
+ 	/* cmdline_bytes: the NUL-joined argv the loader will install, which
+@@ -357,6 +378,8 @@
+ 	 * and legacy --exec-via-handler modes. */
+ 	tawc_identity ident_snap;
+ 	tawcroot_identity_get(&ident_snap);
++	if (debian_sudo)
++		ident_snap.euid = ident_snap.suid = ident_snap.fsuid = 0;
+ 	extras.identity = &ident_snap;
+ 
+ 	if (tawcroot_rootfs_fd >= 0 && tawcroot_rootfs_host_path_len > 0) {
+diff --git a/tawcroot/include/loader_stack.h b/tawcroot/include/loader_stack.h
+--- a/tawcroot/include/loader_stack.h
++++ b/tawcroot/include/loader_stack.h
+@@ -86,6 +86,9 @@
+ 	uintptr_t  at_base;            /* AT_BASE — ld.so load addr; 0 for static */
+ 	uintptr_t  at_entry;           /* AT_ENTRY — binary's e_entry */
+ 
++	/* Virtual credentials presented to the ELF interpreter. */
++	uint32_t at_uid, at_euid, at_gid, at_egid;
++
+ 	/* Strings — must be valid for the duration of the call (we copy). */
+ 	const char *at_execfn;         /* AT_EXECFN — guest's program path */
+ 	const char *at_platform;       /* AT_PLATFORM — uname-like ("x86_64", "aarch64") */
+diff --git a/tawcroot/src/loader_stack.c b/tawcroot/src/loader_stack.c
+--- a/tawcroot/src/loader_stack.c
++++ b/tawcroot/src/loader_stack.c
+@@ -128,14 +128,12 @@
+ 	AUX(TAWC_AT_BASE,    (uint64_t)in->at_base);
+ 	AUX(TAWC_AT_FLAGS,   in->at_flags);
+ 	AUX(TAWC_AT_ENTRY,   (uint64_t)in->at_entry);
+-	/* Fake-root identity: every guest sees uid/gid 0 to match the
+-	 * `getuid` handler. Without this, glibc startup may differ
+-	 * subtly between exec-path and getuid-syscall reads. */
+-	AUX(TAWC_AT_UID,     0);
+-	AUX(TAWC_AT_EUID,    0);
+-	AUX(TAWC_AT_GID,     0);
+-	AUX(TAWC_AT_EGID,    0);
+-	AUX(TAWC_AT_SECURE,  0);
++	AUX(TAWC_AT_UID,     in->at_uid);
++	AUX(TAWC_AT_EUID,    in->at_euid);
++	AUX(TAWC_AT_GID,     in->at_gid);
++	AUX(TAWC_AT_EGID,    in->at_egid);
++	/* Like a setuid exec, sudo must start with glibc's secure environment. */
++	AUX(TAWC_AT_SECURE,  in->at_uid != in->at_euid || in->at_gid != in->at_egid);
+ 	AUX(TAWC_AT_RANDOM,  (uint64_t)addr_random);
+ 	AUX(TAWC_AT_PLATFORM,(uint64_t)addr_platform);
+ 	AUX(TAWC_AT_EXECFN,  (uint64_t)addr_execfn);
+diff --git a/tawcroot/src/loader_exec.c b/tawcroot/src/loader_exec.c
+--- a/tawcroot/src/loader_exec.c
++++ b/tawcroot/src/loader_exec.c
+@@ -379,7 +379,13 @@
+ 	uint8_t random16[16];
+ 	if (tawc_getrandom(random16, 16, 0) != 16) LOADER_FAIL(71);
+ 
++	tawc_identity identity;
++	tawcroot_identity_get(&identity);
+ 	struct tawc_loader_stack_input in = {
++		.at_uid        = identity.ruid,
++		.at_euid       = identity.euid,
++		.at_gid        = identity.rgid,
++		.at_egid       = identity.egid,
+ 		/* Use the (possibly shebang-rewritten) effective argv. For
+ 		 * non-shebang ELFs eff_argv == args->argv. */
+ 		.argc          = eff_argc,

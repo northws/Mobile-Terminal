@@ -203,10 +203,23 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
                     DropdownMenuItem(text = { Text("当前标签全屏") }, enabled = selected != null,
                         onClick = { more = false; owner = selected })
                     DropdownMenuItem(text = { Text("外观设置") }, onClick = { more = false; settings = true })
+                    if (service.needsSudo) {
+                        DropdownMenuItem(
+                            text = { Text(if (service.installingSudo) "正在安装 sudo" else "安装 sudo") },
+                            enabled = !service.installingSudo,
+                            onClick = { more = false; start(Intent(TerminalService.INSTALL_SUDO)) },
+                        )
+                    }
                 }
             }
         }
-        if (!fullscreen) HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+        if (!fullscreen) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+            service.sudoInstallError?.let {
+                Text(it, Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    color = MaterialTheme.colorScheme.error)
+            }
+        }
 
         when (val state = service.installation) {
             Installation.Absent -> InstallCard("在手机上安装 Debian", "首次安装需要联网和 600 MB 可用空间。") {

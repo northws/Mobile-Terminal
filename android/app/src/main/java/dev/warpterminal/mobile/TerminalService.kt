@@ -68,6 +68,13 @@ class TerminalService : Service() {
     private val retiring = mutableSetOf<TerminalTab>()
     internal var installation by mutableStateOf<Installation>(Installation.Absent)
         private set
+    internal var installingSudo by mutableStateOf(false)
+        private set
+    internal var needsSudo by mutableStateOf(false)
+        private set
+    internal var sudoInstallError by mutableStateOf<String?>(null)
+        private set
+    private var triedSudoUpgrade = false
     internal var selected by mutableIntStateOf(0)
         private set
     internal var interrupted by mutableStateOf(false)
@@ -79,7 +86,10 @@ class TerminalService : Service() {
     override fun onCreate() {
         super.onCreate()
         interrupted = preferences.getBoolean("had_sessions", false)
-        if (linux.installed()) installation = Installation.Ready
+        if (linux.installed()) {
+            installation = Installation.Ready
+            needsSudo = !linux.sudoInstalled()
+        }
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "Linux 终端", NotificationManager.IMPORTANCE_LOW),
         )
@@ -89,8 +99,13 @@ class TerminalService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(1, notification())
-        when (intent?.action) {
+        val action = intent?.action
+        if (action in setOf(ADD_TAB, ADD_TERMINAL_APP, ADD_GRAPHICS, ADD_COMPATIBLE_CHROMIUM) &&
+            needsSudo && !triedSudoUpgrade && linux.online()
+        ) installSudo()
+        when (action) {
             INSTALL -> install()
+            INSTALL_SUDO -> installSudo()
             ADD_TAB -> addTab()
             ADD_TERMINAL_APP -> {
                 val name = intent.getStringExtra(APP_NAME)?.takeIf { it.isNotBlank() }
@@ -124,11 +139,32 @@ class TerminalService : Service() {
                     installation = Installation.Working(message, percent)
                 }
                 installation = Installation.Ready
+                needsSudo = !linux.sudoInstalled()
                 addTab()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 installation = Installation.Failed(error.localizedMessage ?: "安装失败")
+                finishIfIdle()
+            }
+        }
+    }
+
+    private fun installSudo() {
+        if (installation != Installation.Ready || !needsSudo || installingSudo) return
+        triedSudoUpgrade = true
+        installingSudo = true
+        sudoInstallError = null
+        scope.launch {
+            try {
+                linux.installSudo()
+                needsSudo = false
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                sudoInstallError = error.localizedMessage ?: "安装 sudo 失败"
+            } finally {
+                installingSudo = false
                 finishIfIdle()
             }
         }
@@ -228,7 +264,8 @@ class TerminalService : Service() {
     }
 
     private fun finishIfIdle() {
-        if (installation !is Installation.Working && graphics.installStatus == null && graphics.activeCount == 0 &&
+        if (installation !is Installation.Working && !installingSudo && graphics.installStatus == null &&
+            graphics.activeCount == 0 &&
             tabs.none { !it.exited } && retiring.none { !it.exited }
         ) {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -263,6 +300,7 @@ class TerminalService : Service() {
 
     companion object {
         internal const val INSTALL = "install"
+        internal const val INSTALL_SUDO = "install_sudo"
         internal const val ADD_TAB = "add_tab"
         internal const val ADD_TERMINAL_APP = "add_terminal_app"
         internal const val INSTALL_GRAPHICS = "install_graphics"
@@ -302,7 +340,7 @@ internal class TerminalTab(
     var statusLine by mutableStateOf<String?>(null)
         private set
     val running get() = !ready && !closing && !exited && blocks.lastOrNull()?.let { it.code == null } == true
-    var directory by mutableStateOf("/home/warp")
+    var directory by mutableStateOf(DEBIAN_HOME)
         private set
     var ready by mutableStateOf(false)
         private set

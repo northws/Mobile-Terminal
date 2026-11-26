@@ -1,5 +1,15 @@
 # Mobile Terminal 验证记录
 
+## Debian 默认用户与 sudo
+
+2026-11-26 验证 Bash、终端应用和桌面应用的默认启动账户。主目录继续挂载于 `/home/warp`，Debian 内的管理命令使用免密码 `sudo`。
+
+- Debian 13 / WSL2 通过 8 项 Android JVM 测试、2 项 Rust 单元测试和 Bash PTY 回归。重新构建了 ARM64 `libtawcroot.so`。在隔离的 x86_64 Debian 环境中验证 `id -un` 输出 `Debian`，`sudo -n id -u` 输出 `0`，并通过 `sudo -n apt-get -s install sudo`。
+- 荣耀 MagicPad3 Pro 13.3（YLP-W00、Android 17、ARM64）通过 7 项仪器测试。并存测试包使用 SHA-256 匹配的 Debian 基础归档完成首次初始化，APT 安装了 `sudo`。应用界面返回 `Debian:1000`，`sudo -n id -u` 返回 `0`。执行后原 Bash 仍是普通用户。
+- 在并存测试包内模拟旧环境缺少账户和 sudo，打开飞行模式、关闭 Wi-Fi 并冷启动后，Bash 创建 `Debian` 用户并读取原有文件。恢复网络和测试用 sudo 二进制后，冷启动自动写入 sudo 配置并可执行管理命令。主目录测试文件 SHA-256 前后均为 `24de9fc5ad20625a9bb5be2b6cdc7d355e0d21edc66af07973b125b1106a919b`。
+- 从「图形应用」启动 XWayland `xeyes`，启动脚本记录 `Debian:1000`，图形标签显示后可关闭。安装图形软件包时使用 `sudo apt-get`。
+- 本地正式包名调试 APK SHA-256 为 `7d2db5739e665dcf8e0752417692709504455b746e433412fb89a8e9ed1bd724`，并存真机测试 APK SHA-256 为 `e4c435311aefdbf5e28ad8b0b7b20f6d22c0b2f9258206dccd3d8be493654ebf`。两者均通过 APK v2 签名验证。
+
 ## 0.2.12 正式版
 
 2026-11-26 在 Debian 13 / WSL2 运行 `scripts/build-debug`，完成 ARM64 原生组件构建和 APK 打包。正式包为 `dev.warpterminal.mobile`，`versionName=0.2.12`，`versionCode=14`，最低支持 Android 10。APK 为 41,715,938 字节，SHA-256 为 `d452846fee5f7d781eb651837f84c93d4952de342ccbce6c1947c946547c7e6c`。APK v2 签名通过，签名证书与已发布的 0.2.11 一致，满足 Android 覆盖安装的包名、签名和版本要求。

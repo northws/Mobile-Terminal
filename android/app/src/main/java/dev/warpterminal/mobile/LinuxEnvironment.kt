@@ -2,6 +2,7 @@ package dev.warpterminal.mobile
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.StatFs
 import android.system.Os
@@ -18,9 +19,15 @@ import javax.net.ssl.HttpsURLConnection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+internal const val DEBIAN_USER = "Debian"
+internal const val DEBIAN_HOME = "/home/warp"
+
 internal class LinuxEnvironment(private val context: Context) {
+    private val packageInstallation = Mutex()
     private val base = File(context.filesDir, "linux")
     private val rootfs = File(base, "rootfs")
     val home = File(base, "home")
@@ -38,6 +45,15 @@ internal class LinuxEnvironment(private val context: Context) {
     internal val chromiumBinary get() = File(rootfs, "usr/lib/chromium/chromium")
 
     fun installed(): Boolean = marker.isFile && File(rootfs, "usr/bin/bash").isFile
+
+    fun sudoInstalled(): Boolean = File(rootfs, "usr/bin/sudo").canExecute() &&
+        File(rootfs, "etc/sudoers.d/90-mobile-terminal").isFile
+
+    fun online(): Boolean {
+        val network = context.getSystemService(ConnectivityManager::class.java)
+        return network.getNetworkCapabilities(network.activeNetwork)
+            ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+    }
 
     @Synchronized
     fun prepareRunner() {
@@ -62,7 +78,10 @@ internal class LinuxEnvironment(private val context: Context) {
 
     suspend fun install(progress: (String, Float?) -> Unit) = withContext(Dispatchers.IO) {
         prepareRunner()
-        if (installed()) return@withContext
+        if (installed()) {
+            prepareAccount(rootfs)
+            return@withContext
+        }
         if (StatFs(base.path).availableBytes < 600L * 1024 * 1024) {
             throw IOException("至少需要 600 MB 可用空间")
         }
@@ -83,10 +102,13 @@ internal class LinuxEnvironment(private val context: Context) {
         runStep(guest(candidate, "/usr/bin/apt-get", "update"), "更新 Debian 软件包索引")
         runStep(
             guest(candidate, "/usr/bin/apt-get", "-y", "--no-install-recommends",
-                "install", "vim", "less", "ca-certificates", "libfontconfig1", "libfreetype6",
+                "install", "vim", "less", "sudo", "ca-certificates", "libfontconfig1", "libfreetype6",
                 "libwayland-client0", "libwayland-egl1", "libwayland-server0", "libx11-6", "libx11-xcb1"),
             "安装 Debian 软件包",
         )
+        progress("正在准备 Debian 用户和 sudo", null)
+        prepareAccount(candidate)
+        configureSudo(candidate)
         progress("正在检查 Bash 和 Warp 命令块", null)
         verifyBackend(candidate)
 
@@ -114,22 +136,41 @@ internal class LinuxEnvironment(private val context: Context) {
     }
 
     fun spawn(): Process = guest(
-        rootfs, "/usr/bin/env", "WARP_PATH_APPEND=/home/warp/.local/bin:/home/warp/.opencode/bin",
-        "/opt/warp/warp-android-backend", graphics = true, allowX11Override = true,
+        rootfs, "/usr/bin/env", "WARP_PATH_APPEND=$DEBIAN_HOME/.local/bin:$DEBIAN_HOME/.opencode/bin",
+        "/opt/warp/warp-android-backend", asDebian = true, graphics = true, allowX11Override = true,
     ).start()
 
+    suspend fun installSudo() = withContext(Dispatchers.IO) {
+        packageInstallation.withLock {
+            check(installed())
+            if (sudoInstalled()) return@withLock
+            prepareAccount(rootfs)
+            if (!File(rootfs, "usr/bin/sudo").canExecute()) {
+                if (!online()) throw IOException("请联网后重试安装 sudo")
+                prepareRoot(rootfs)
+                runStep(guest(rootfs, "/usr/bin/apt-get", "-o", "APT::Update::Error-Mode=any", "update"),
+                    "更新 Debian 软件包索引")
+                runStep(guest(rootfs, "/usr/bin/apt-get", "-y", "--no-install-recommends", "install", "sudo"),
+                    "安装 sudo")
+            }
+            configureSudo(rootfs)
+        }
+    }
+
     suspend fun installGraphics(progress: (String) -> Unit) = withContext(Dispatchers.IO) {
-        check(installed())
-        prepareRoot(rootfs)
-        progress("正在更新 Debian 软件包索引")
-        runStep(guest(rootfs, "/usr/bin/apt-get", "update"), "更新 Debian 软件包索引")
-        progress("正在安装 Mousepad、xeyes 和中文字体")
-        runStep(
-            guest(rootfs, "/usr/bin/apt-get", "-y", "--no-install-recommends", "install",
-                "libglib2.0-bin", "mousepad", "x11-apps", "fonts-noto-cjk", "libwayland-egl1",
-                "libwayland-server0", "libx11-xcb1"),
-            "安装图形示例软件",
-        )
+        packageInstallation.withLock {
+            check(installed())
+            prepareRoot(rootfs)
+            progress("正在更新 Debian 软件包索引")
+            runStep(guest(rootfs, "/usr/bin/apt-get", "update"), "更新 Debian 软件包索引")
+            progress("正在安装 Mousepad、xeyes 和中文字体")
+            runStep(
+                guest(rootfs, "/usr/bin/apt-get", "-y", "--no-install-recommends", "install",
+                    "libglib2.0-bin", "mousepad", "x11-apps", "fonts-noto-cjk", "libwayland-egl1",
+                    "libwayland-server0", "libx11-xcb1"),
+                "安装图形示例软件",
+            )
+        }
     }
 
     fun launchGraphics(app: LinuxApp, token: String, chromiumCompatibility: Boolean,
@@ -147,7 +188,7 @@ internal class LinuxEnvironment(private val context: Context) {
             chromiumCompatibility -> {
                 check(app.isDebianChromium)
                 if (!File(rootfs, "usr/bin/chromium").canExecute()) throw IOException("Debian 中尚未安装 Chromium")
-                chromiumCommand(chromiumBackend, "/home/warp/.local/share/mobile-terminal/chromium", "about:blank")
+                chromiumCommand(chromiumBackend, "$DEBIAN_HOME/.local/share/mobile-terminal/chromium", "about:blank")
             }
             app.desktopFile != null -> {
                 if (!File(rootfs, "usr/bin/gio").canExecute()) {
@@ -158,7 +199,8 @@ internal class LinuxEnvironment(private val context: Context) {
             else -> arrayOf("/usr/bin/xeyes")
         }
         return guest(rootfs, "/bin/bash", "-c", "cd \"\$HOME\" && exec \"\$@\"", "warp-launch",
-            *command, graphics = true, activation = token, backend = backend, chromiumBackend = chromiumBackend)
+            *command, asDebian = true, graphics = true, activation = token, backend = backend,
+            chromiumBackend = chromiumBackend)
             .redirectOutput(File("/dev/null")).redirectError(File("/dev/null"))
             .start().also { it.outputStream.close() }
     }
@@ -173,7 +215,7 @@ internal class LinuxEnvironment(private val context: Context) {
                 arrayOf("--class=mobile-terminal-webgl-probe", "--disable-background-networking",
                     "--enable-logging=stderr")
         }
-        return guest(rootfs, *command, graphics = true, activation = token,
+        return guest(rootfs, *command, asDebian = true, graphics = true, activation = token,
             backend = chromiumBackend?.display ?: path, chromiumBackend = chromiumBackend)
             .redirectErrorStream(true).redirectOutput(output).start().also { it.outputStream.close() }
     }
@@ -226,14 +268,16 @@ internal class LinuxEnvironment(private val context: Context) {
     private fun guest(
         root: File,
         vararg command: String,
+        asDebian: Boolean = false,
         graphics: Boolean = false,
         activation: String? = null,
         backend: GpuPath? = acceleration.backend(GpuPath.WAYLAND),
         allowX11Override: Boolean = false,
         chromiumBackend: ChromiumBackend? = null,
     ): ProcessBuilder {
+        val account = if (asDebian) prepareAccount(root) else null
         val args = mutableListOf(tawcroot.path, "-s", "-r", root.path)
-        for (bind in listOf("/dev:/dev", "/proc:/proc", "/sys:/sys", "${home.path}:/home/warp", "${runnerDir.path}:/opt/warp:ro")) {
+        for (bind in listOf("/dev:/dev", "/proc:/proc", "/sys:/sys", "${home.path}:$DEBIAN_HOME", "${runnerDir.path}:/opt/warp:ro")) {
             args.addAll(listOf("-b", bind))
         }
         val x11 = File(graphicsShare, "xtmp/.X11-unix")
@@ -250,7 +294,9 @@ internal class LinuxEnvironment(private val context: Context) {
                 args.addAll(listOf("-b", "${hybris.path}:/usr/lib/hybris:ro"))
             }
         }
-        args.addAll(listOf("--", "/usr/bin/env", "-i", "HOME=/home/warp", "USER=warp",
+        val user = if (asDebian) DEBIAN_USER else "root"
+        val guestHome = if (asDebian) DEBIAN_HOME else "/root"
+        args.addAll(listOf("--", "/usr/bin/env", "-i", "HOME=$guestHome", "USER=$user", "LOGNAME=$user", "SHELL=/bin/bash",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games",
             "LANG=C.UTF-8", "TMPDIR=/tmp", "DEBIAN_FRONTEND=noninteractive"))
         if (display) {
@@ -273,6 +319,12 @@ internal class LinuxEnvironment(private val context: Context) {
             }
         }
         if (activation != null) args.addAll(listOf("XDG_ACTIVATION_TOKEN=$activation", "DESKTOP_STARTUP_ID=$activation"))
+        if (account != null) {
+            // setpriv applies its UID change before its GID change. Set the
+            // guest group while the launcher still has virtual root privileges.
+            args.addAll(listOf("/usr/bin/setpriv", "--regid=${account.second}", "--clear-groups", "--",
+                "/usr/bin/setpriv", "--reuid=${account.first}", "--"))
+        }
         args.addAll(command)
         return ProcessBuilder(args).directory(File(root, "tmp")).apply {
             environment().clear()
@@ -280,8 +332,52 @@ internal class LinuxEnvironment(private val context: Context) {
         }
     }
 
+    @Synchronized
+    private fun prepareAccount(root: File): Pair<Int, Int> {
+        val passwd = File(root, "etc/passwd")
+        fun entry(): List<String>? = passwd.useLines { lines ->
+            lines.firstOrNull { it.startsWith("$DEBIAN_USER:") }?.split(':')
+        }
+        var account = entry()
+        if (account == null) {
+            runStep(guest(root, "/usr/sbin/useradd", "--badname", "--no-create-home", "--user-group",
+                "--home-dir", DEBIAN_HOME, "--shell", "/bin/bash", DEBIAN_USER), "创建 Debian 用户")
+            account = entry()
+        }
+        val record = account ?: throw IOException("找不到 Debian 用户")
+        val uid = record.getOrNull(2)?.toIntOrNull()?.takeIf { it > 0 }
+        val gid = record.getOrNull(3)?.toIntOrNull()?.takeIf { it > 0 }
+        if (uid == null || gid == null) throw IOException("Debian 用户必须使用非 root 身份")
+        if (record.getOrNull(5) != DEBIAN_HOME || record.getOrNull(6) != "/bin/bash") {
+            runStep(guest(root, "/usr/sbin/usermod", "--home", DEBIAN_HOME, "--shell", "/bin/bash", DEBIAN_USER),
+                "配置 Debian 用户主目录")
+        }
+        return uid to gid
+    }
+
+    private fun configureSudo(root: File) {
+        val script = """
+            set -eu
+            temp=${'$'}(mktemp /etc/sudoers.d/.mobile-terminal-XXXXXX)
+            trap 'rm -f -- "${'$'}temp"' EXIT
+            printf '%s\n' '$DEBIAN_USER ALL=(ALL:ALL) NOPASSWD: ALL' > "${'$'}temp"
+            chmod 0440 "${'$'}temp"
+            /usr/sbin/visudo -cf "${'$'}temp"
+            mv -f -- "${'$'}temp" /etc/sudoers.d/90-mobile-terminal
+        """.trimIndent()
+        runStep(guest(root, "/bin/bash", "-c", script), "配置 sudo")
+        try {
+            runStep(guest(root, "/usr/bin/sudo", "-n", "/bin/bash", "-c",
+                """test "${'$'}(/usr/bin/id -u)" = 0""", asDebian = true),
+                "检查 Debian 用户的 sudo 权限")
+        } catch (error: IOException) {
+            File(root, "etc/sudoers.d/90-mobile-terminal").delete()
+            throw error
+        }
+    }
+
     private fun prepareRoot(root: File) {
-        for (path in listOf("home/warp", "opt/warp", "dev", "proc", "sys", "tmp")) {
+        for (path in listOf(DEBIAN_HOME.removePrefix("/"), "opt/warp", "dev", "proc", "sys", "tmp")) {
             checkDirectory(File(root, path))
         }
         val network = context.getSystemService(ConnectivityManager::class.java)
@@ -345,7 +441,7 @@ internal class LinuxEnvironment(private val context: Context) {
     }
 
     private fun verifyBackend(root: File) {
-        val process = guest(root, "/opt/warp/warp-android-backend")
+        val process = guest(root, "/opt/warp/warp-android-backend", asDebian = true)
             .redirectError(File("/dev/null")).start()
         val timeout = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
         timeout.schedule({ process.destroyForcibly() }, 15, TimeUnit.SECONDS)

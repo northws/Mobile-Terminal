@@ -119,12 +119,19 @@ class LinuxSessionTest {
         val linux = LinuxEnvironment(context)
         linux.install { _, _ -> }
         assertTrue(linux.installed())
+        linux.installSudo()
+        assertTrue(linux.sudoInstalled())
         val first = Session(linux.spawn())
         val second = Session(linux.spawn())
         first.use {
             second.use {
                 first.handshake()
                 second.handshake()
+                assertEquals("Debian", first.command("id -un", 0).trim())
+                assertTrue(first.command("id -u", 0).trim().toInt() > 0)
+                assertEquals("0", first.command("sudo -n id -u", 0).trim())
+                assertEquals("Debian", second.command("whoami", 0).trim())
+                assertEquals("Debian", first.command("whoami", 0).trim())
                 val searchPath = first.command("printf %s \"\$PATH\"", 0).split(':')
                 assertTrue(searchPath.containsAll(listOf("/home/warp/.local/bin", "/home/warp/.opencode/bin")))
                 assertEquals("你好\n", first.command("printf '你好\\n' | cat", 0))

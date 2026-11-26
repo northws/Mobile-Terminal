@@ -20,7 +20,7 @@ Android 会话服务持有 TAWC 合成器和每个 Linux 主窗口的标签状�
 | `scripts` | 环境检查、依赖准备、打包和测试 |
 | `docs` | 协议、阶段验收与验证记录 |
 
-tawcroot 随 APK 安装至 Android 原生库目录，启动 Debian 内的后端。安装器在临时目录验证并展开 rootfs，执行 Bash 握手自检，再提交环境。失败后保留可重试的下载，用户主目录独立挂载为 `/home/warp`。
+tawcroot 随 APK 安装至 Android 原生库目录，启动 Debian 内的后端。安装器在临时目录验证并展开 rootfs，执行 Bash 握手自检，再提交环境。失败后保留可重试的下载，用户主目录独立挂载为 `/home/warp`。Bash、TUI 和图形应用默认使用普通用户 `Debian`。初装包括 `sudo`；旧环境启动时保留主目录并创建该账户，联网补装缺少的 `sudo`。
 
 每个标签运行一个后端及一个 Bash PTY。后端通过 Warp 的 Bash 事件标记命令开始、结束与提示符，经版本化标准输入输出帧与 Android 通信。Android 服务保留会话，界面重连时读取当前状态。全屏应用使用终端网格。文件输入输出使用系统文件选择器和流式复制。
 

@@ -13,6 +13,7 @@
 
 Android 首次安装下载的 Debian 镜像必须与锁定的 SHA-256 一致。基础软件的安装通过 Debian 软件包管理器验证软件包签名。
 
+- `tawc-debian-sudo.patch` 让 Debian 自带的 `/usr/bin/sudo` 在 tawcroot 中获得虚拟 root。执行时核对 ELF 的实际位置和 setuid 位，初始化辅助向量沿用虚拟用户 ID 并启用 glibc 的安全执行环境。Android 进程权限仍由应用 UID 决定。验证覆盖 `id -un`、`sudo -n id -u`、APT 和会话返回后的身份。
 - `tawc-tabs.patch` 在锁定版合成器上添加按主窗口关闭的 JNI 入口，并将 Warp 独立主目录纳入桌面应用扫描。通过原生 ARM64 编译、两种协议的窗口启动以及取消关闭场景验收。
 - `tawc-libtool.patch` 适配新版 Libtool 移除的宏。Bionic 使用 ELF 的无前缀 C 符号。通过 XWayland 全量交叉编译验证。
 - `tawc-libhybris.patch` 让 Debian 构建复用 XWayland 依赖中锁定的私有 Wayland EGL 头文件，并在头文件路径变动时刷新配置。通过 ARM64 交叉编译验证。
