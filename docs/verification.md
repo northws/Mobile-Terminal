@@ -1,5 +1,13 @@
 # Mobile Terminal 验证记录
 
+## 0.2.12 正式版
+
+2026-11-26 在 Debian 13 / WSL2 运行 `scripts/build-debug`，完成 ARM64 原生组件构建和 APK 打包。正式包为 `dev.warpterminal.mobile`，`versionName=0.2.12`，`versionCode=14`，最低支持 Android 10。APK 为 41,715,938 字节，SHA-256 为 `d452846fee5f7d781eb651837f84c93d4952de342ccbce6c1947c946547c7e6c`。APK v2 签名通过，签名证书与已发布的 0.2.11 一致，满足 Android 覆盖安装的包名、签名和版本要求。
+
+- 主机测试通过 8 项 Android JVM 测试、2 项 Rust 单元测试和真实 Bash PTY 回归。Android 设备测试包已编译。
+- 对比 0.2.11 的 87 项原生库和生成资源，85 项逐字节相同。重新打包的 `hybris.tar` 和 `xkb.tar` 中全部成员的内容、文件类型、权限和链接目标一致。
+- 荣耀 MagicPad3 Pro 13.3（YLP-W00、Android 17、ARM64）的 7 项设备自动测试、Bash/Vim 全屏和外观持久化结果来自并存预览包。正式 APK 的覆盖安装、图形标签沉浸模式、旋转、中文输入法及保存流程仍待真机复测。
+
 ## 标签全屏与外观设置
 
 2026-11-26，Debian 13 / WSL2（JDK 21、Gradle 8.12、Android SDK 36）运行 `:app:testDebugUnitTest`，8 项通过（外观与全屏状态 3 项、命令块 2 项、帧协议 3 项）。完整原生重建未完成；未运行本次 Rust 和 Bash PTY 主机回归，也未运行模拟器。

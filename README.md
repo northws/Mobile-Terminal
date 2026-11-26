@@ -4,7 +4,7 @@ Mobile Terminal 是一款 Android 原生终端。它在手机本地运行 Debian
 
 ## 使用
 
-在 ARM64 Android 10 或更新版本上侧载调试 APK。首次打开后选择安装 Debian，应用会校验 Debian 镜像、安装 `vim` 和 `less` 并检查终端。初始化需要网络及至少 600 MB 可用空间。完成以后可离线打开 Bash。
+从 [v0.2.12 正式版](https://github.com/northws/Mobile-Terminal/releases/tag/v0.2.12) 下载 APK 和 SHA-256 校验文件，适用于 ARM64 Android 10 或更新版本。已有正式版的用户可直接覆盖安装以保留 Debian 和主目录。首次打开后选择安装 Debian，应用会校验镜像、安装 `vim` 和 `less` 并检查终端。初始化需要网络及至少 600 MB 可用空间，完成后可离线打开 Bash。
 
 - **更多 → 当前标签全屏**隐藏系统栏、标题栏和标签栏，不切换终端模式。点右上角「退出全屏」或使用系统返回可还原布局；已打开输入法时，返回先收起键盘。图形标签在全屏右下角保留「键盘」。
 - **更多 → 外观设置**可预览并切换默认薄荷、深色海蓝、浅色纸白，以及紧凑、标准、大字三档字号。设置立即应用并在重启后保留。「恢复默认」还原薄荷与标准字号。配色不覆盖终端 ANSI 颜色或 Linux 图形应用自己的主题。
@@ -59,12 +59,6 @@ APK 和 SHA-256 默认位于 `build/mobile-terminal-arm64-debug.apk` 和 `build/
 WARP_BUILD_DIR="$PWD/build/preview" ORG_GRADLE_PROJECT_warpIsolatedTest=true bash scripts/build-debug
 adb install -r build/preview/mobile-terminal-arm64-debug.apk
 ```
-
-### 本次全屏与外观改动的验证状态
-
-- Debian 13 / WSL2 上的 Android Gradle JVM 测试通过（8 项）。完整原生依赖重建尚未完成。
-- [并存测试 APK](https://github.com/northws/Mobile-Terminal/releases/download/v0.2.12-preview.1/mobile-terminal-arm64-preview-debug.apk)与 [SHA-256](https://github.com/northws/Mobile-Terminal/releases/download/v0.2.12-preview.1/mobile-terminal-arm64-preview-debug.apk.sha256)已生成。Android 代码来自当前工作树，原生组件复用经逐字节校验的 0.2.11 构建。
-- 已在荣耀平板（YLP-W00、Android 17、ARM64）安装并存测试版，7 项 ARM64 真机自动测试通过。原应用安装包哈希不变，未改动其 Debian 数据。详见[验收记录](docs/verification.md#标签全屏与外观设置)。
 
 ## 工程资料
 
