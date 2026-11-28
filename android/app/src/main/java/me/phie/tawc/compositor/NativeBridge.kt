@@ -27,6 +27,7 @@ internal object NativeBridge {
     external fun nativeQueryState(): String?
     external fun nativeSetTintBuffersByType(tint: Boolean)
     external fun nativeScanWarpApplications(root: String, home: String): String?
+    external fun nativeResolveIcon(rootfs: String, value: String): String?
     external fun nativeReserveLaunchHost(id: String, desktopId: String, pointer: Int): String?
     external fun nativeUpdateLaunch(id: String, sid: Int, exited: Boolean)
     external fun nativeReleaseLaunchHost(id: String)
@@ -68,8 +69,8 @@ internal object NativeBridge {
     @JvmStatic fun setActivityFullscreen(id: String, fullscreen: Boolean) = Unit
     @JvmStatic fun updateWindowMetadata(id: String, title: String, appId: String,
                                         desktopId: String, desktopName: String, icon: String, pid: Int) {
-        val launchId = desktopId.ifBlank { appId.takeIf { it.equals("xeyes", true) }?.lowercase().orEmpty() }
-        dispatch { metadataChanged(id, title.ifBlank { desktopName.ifBlank { appId } }, launchId.ifBlank { null }, pid) }
+        dispatch { metadataChanged(id, title.ifBlank { desktopName.ifBlank { appId } },
+            desktopId.ifBlank { appId }.ifBlank { null }, pid, icon.ifBlank { null }) }
     }
     @JvmStatic fun onShowKeyboard(id: String) { view(id) { showKeyboard() } }
     @JvmStatic fun onHideKeyboard(id: String) { view(id) { hideKeyboard() } }

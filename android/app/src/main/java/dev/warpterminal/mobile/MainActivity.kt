@@ -167,10 +167,8 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
     }
     val imeOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     BackHandler(enabled = fullscreen && !imeOpen) { owner = null }
-    var more by remember { mutableStateOf(false) }
     var settings by rememberSaveable { mutableStateOf(false) }
     var shortcutTab by rememberSaveable { mutableStateOf<Int?>(null) }
-    var menu by remember { mutableStateOf(false) }
     var showApps by rememberSaveable { mutableStateOf(false) }
     var showCommand by rememberSaveable { mutableStateOf(false) }
     var confirmChromium by remember { mutableStateOf<LinuxApp?>(null) }
@@ -202,44 +200,42 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
                 overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             if (service.installation == Installation.Ready) {
                 FileActions(service.linux, notices, visible = !fullscreen)
-                if (!fullscreen) Box {
-                    FilledTonalButton(onClick = { menu = true }) { Text("＋ 新标签") }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text("Bash") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
-                            onClick = { menu = false; bash() })
-                        DropdownMenuItem(text = { Text("OpenCode") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
-                            onClick = { menu = false; openApp(TerminalApp.OpenCode) })
-                        DropdownMenuItem(text = { Text("Vim") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
-                            onClick = { menu = false; openApp(TerminalApp.Vim) })
-                        DropdownMenuItem(text = { Text("其他终端应用") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
-                            onClick = { menu = false; showCommand = true })
-                        DropdownMenuItem(text = { Text("图形应用") },
-                            onClick = { menu = false; showApps = true })
-                    }
+                if (!fullscreen) ToolbarMenuButton(button = { open ->
+                    FilledTonalButton(onClick = open) { Text("＋ 新标签") }
+                }) { dismiss ->
+                    DropdownMenuItem(text = { Text("Bash") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
+                        onClick = { dismiss(); bash() })
+                    DropdownMenuItem(text = { Text("OpenCode") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
+                        onClick = { dismiss(); openApp(TerminalApp.OpenCode) })
+                    DropdownMenuItem(text = { Text("Vim") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
+                        onClick = { dismiss(); openApp(TerminalApp.Vim) })
+                    DropdownMenuItem(text = { Text("其他终端应用") }, enabled = service.tabs.size < TerminalService.MAX_TABS,
+                        onClick = { dismiss(); showCommand = true })
+                    DropdownMenuItem(text = { Text("图形应用") },
+                        onClick = { dismiss(); showApps = true })
                 }
             }
-            if (!fullscreen) Box {
-                TextButton(onClick = { more = true }) { Text("更多") }
-                DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
-                    DropdownMenuItem(text = { Text("当前标签全屏") }, enabled = selected != null,
-                        onClick = { more = false; owner = selected })
-                    DropdownMenuItem(text = { Text("在独立窗口打开") },
-                        enabled = selected != null && tab?.exited != true && window?.error == null,
-                        onClick = {
-                            more = false
-                            keyboard?.hide()
-                            selected?.let { WindowLinks.open(activity, service.keyForTab(it), adjacent = true) }
-                        })
-                    DropdownMenuItem(text = { Text("创建桌面快捷方式") }, enabled = selected != null,
-                        onClick = { more = false; shortcutTab = selected })
-                    DropdownMenuItem(text = { Text("外观设置") }, onClick = { more = false; settings = true })
-                    if (service.needsSudo) {
-                        DropdownMenuItem(
-                            text = { Text(if (service.installingSudo) "正在安装 sudo" else "安装 sudo") },
-                            enabled = !service.installingSudo,
-                            onClick = { more = false; start(Intent(TerminalService.INSTALL_SUDO)) },
-                        )
-                    }
+            if (!fullscreen) ToolbarMenuButton(button = { open ->
+                TextButton(onClick = open) { Text("更多") }
+            }) { dismiss ->
+                DropdownMenuItem(text = { Text("当前标签全屏") }, enabled = selected != null,
+                    onClick = { dismiss(); owner = selected })
+                DropdownMenuItem(text = { Text("在独立窗口打开") },
+                    enabled = selected != null && tab?.exited != true && window?.error == null,
+                    onClick = {
+                        dismiss()
+                        keyboard?.hide()
+                        selected?.let { WindowLinks.open(activity, service.keyForTab(it), adjacent = true) }
+                    })
+                DropdownMenuItem(text = { Text("创建桌面快捷方式") }, enabled = selected != null,
+                    onClick = { dismiss(); shortcutTab = selected })
+                DropdownMenuItem(text = { Text("外观设置") }, onClick = { dismiss(); settings = true })
+                if (service.needsSudo) {
+                    DropdownMenuItem(
+                        text = { Text(if (service.installingSudo) "正在安装 sudo" else "安装 sudo") },
+                        enabled = !service.installingSudo,
+                        onClick = { dismiss(); start(Intent(TerminalService.INSTALL_SUDO)) },
+                    )
                 }
             }
         }
@@ -278,7 +274,7 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
                 if (selected == null) {
                     InstallCard(if (service.interrupted) "上次会话已结束" else "打开本地终端",
                         "Linux 主目录保存在此设备上。", "打开 Bash", ::bash)
-                } else HostedTab(service, selected, Modifier.weight(1f), fullscreen, ::activateTab)
+                } else HostedTab(service, selected, Modifier.weight(1f), !fullscreen, activate = ::activateTab)
             }
         }
         SnackbarHost(notices)
@@ -353,22 +349,23 @@ internal fun ChromiumLaunchConfirmation(gpu: GraphicsAcceleration, preferred: Ch
 }
 
 @Composable
-internal fun HostedTab(service: TerminalService, id: Int, modifier: Modifier, fullscreen: Boolean,
+internal fun HostedTab(service: TerminalService, id: Int, modifier: Modifier, showToolbar: Boolean,
+    windowMenu: (@Composable () -> Unit)? = null,
     activate: (Int) -> Unit) = key(id) {
     val terminal = service.tabs.firstOrNull { it.id == id }
     val application = service.terminalAppTabs.firstOrNull { it.id == id }
     val graphics = service.graphics.tabs.firstOrNull { it.id == id }
     when {
         terminal?.showingStartupApp == true -> TerminalAppPanel(terminal.title, terminal, modifier,
-            fullscreen, closesSession = true) { service.closeTab(terminal) }
-        terminal != null -> SessionPanel(terminal, modifier, fullscreen,
+            showToolbar, windowMenu, closesSession = true) { service.closeTab(terminal) }
+        terminal != null -> SessionPanel(terminal, modifier, showToolbar, windowMenu,
             appActive = terminal.alternate || service.terminalAppTabs.any { it.session == terminal },
             openApp = { service.openTerminalApp(terminal)?.let(activate) },
             close = { service.closeTab(terminal) })
-        application != null -> TerminalAppPanel(application.title, application.session, modifier, fullscreen) {
+        application != null -> TerminalAppPanel(application.title, application.session, modifier, showToolbar, windowMenu) {
             service.closeTerminalApp(application)
         }
-        graphics != null -> GraphicsPanel(graphics, modifier, fullscreen) { service.graphics.close(graphics) }
+        graphics != null -> GraphicsPanel(graphics, modifier, showToolbar, windowMenu) { service.graphics.close(graphics) }
         else -> Unit
     }
 }
@@ -377,12 +374,14 @@ internal fun HostedTab(service: TerminalService, id: Int, modifier: Modifier, fu
 internal fun TabViewport(size: TerminalSize, fullscreen: Boolean, exit: () -> Unit,
     content: @Composable ColumnScope.() -> Unit) {
     Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
-        CompositionLocalProvider(LocalTerminalSize provides size) {
-            Column(Modifier.fillMaxSize(), content = content)
+        ToolbarMenuHost {
+            CompositionLocalProvider(LocalTerminalSize provides size) {
+                Column(Modifier.fillMaxSize(), content = content)
+            }
+            if (fullscreen) FilledTonalButton(onClick = exit,
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 4.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp)) { Text("退出全屏") }
         }
-        if (fullscreen) FilledTonalButton(onClick = exit,
-            modifier = Modifier.align(Alignment.TopEnd).padding(end = 4.dp),
-            contentPadding = PaddingValues(horizontal = 8.dp)) { Text("退出全屏") }
     }
 }
 
@@ -480,11 +479,12 @@ private fun GraphicsPicker(graphics: GraphicsSessions, close: () -> Unit, instal
 }
 
 @Composable
-private fun GraphicsPanel(tab: GraphicsTab, modifier: Modifier, fullscreen: Boolean, close: () -> Unit) {
+private fun GraphicsPanel(tab: GraphicsTab, modifier: Modifier, showToolbar: Boolean,
+    windowMenu: (@Composable () -> Unit)?, close: () -> Unit) {
     var view by remember { mutableStateOf<GraphicsView?>(null) }
     Box(modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxSize()) {
-            if (!fullscreen) AppTabToolbar(tab.title, view != null, keyboard = { view?.showKeyboard() }, close = close)
+            if (showToolbar) AppTabToolbar(tab.title, view != null, { view?.showKeyboard() }, close, windowMenu)
             val error = tab.error
             when {
                 error != null -> Text(error, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
@@ -499,18 +499,20 @@ private fun GraphicsPanel(tab: GraphicsTab, modifier: Modifier, fullscreen: Bool
                 )
             }
         }
-        if (fullscreen && view != null) FilledTonalButton(onClick = { view?.showKeyboard() },
+        if (!showToolbar && windowMenu == null && view != null) FilledTonalButton(onClick = { view?.showKeyboard() },
             modifier = Modifier.align(Alignment.BottomEnd)) { Text("键盘") }
     }
 }
 
 @Composable
-private fun AppTabToolbar(title: String, keyboardReady: Boolean, keyboard: () -> Unit, close: () -> Unit) {
+private fun AppTabToolbar(title: String, keyboardReady: Boolean, keyboard: () -> Unit, close: () -> Unit,
+    windowMenu: (@Composable () -> Unit)?) {
     Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Text(title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         TextButton(onClick = keyboard, enabled = keyboardReady) { Text("键盘") }
         TextButton(onClick = close) { Text("关闭标签") }
+        windowMenu?.invoke()
     }
 }
 
@@ -519,16 +521,17 @@ private fun TerminalAppPanel(
     title: String,
     tab: TerminalTab,
     modifier: Modifier,
-    fullscreen: Boolean,
+    showToolbar: Boolean,
+    windowMenu: (@Composable () -> Unit)?,
     closesSession: Boolean = false,
     close: () -> Unit,
 ) {
     var view by remember { mutableStateOf<TerminalGrid?>(null) }
     var confirmClose by rememberSaveable { mutableStateOf(false) }
     Column(modifier.fillMaxWidth()) {
-        if (!fullscreen) AppTabToolbar(title, view != null, keyboard = { view?.showKeyboard() }, close = {
+        if (showToolbar) AppTabToolbar(title, view != null, keyboard = { view?.showKeyboard() }, close = {
             if (closesSession && tab.running) confirmClose = true else close()
-        })
+        }, windowMenu = windowMenu)
         TerminalSurface(tab, Modifier.weight(1f)) { view = it }
     }
     if (confirmClose) {
@@ -581,7 +584,8 @@ private fun InstallCard(title: String, body: String, action: String = "安装 De
 private fun SessionPanel(
     tab: TerminalTab,
     modifier: Modifier,
-    fullscreen: Boolean,
+    showToolbar: Boolean,
+    windowMenu: (@Composable () -> Unit)?,
     appActive: Boolean,
     openApp: () -> Unit,
     close: () -> Unit,
@@ -608,31 +612,30 @@ private fun SessionPanel(
         }
     }
     Column(modifier) {
-        if (!fullscreen) BoxWithConstraints(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
+        if (showToolbar) BoxWithConstraints(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
             .padding(start = 12.dp, end = 4.dp)) {
-            val compact = maxWidth < 400.dp
+            val compact = maxWidth < if (windowMenu == null) 400.dp else 500.dp
             val modeTitle = if (appActive) "打开终端应用" else if (raw) "命令块" else "终端"
             val switchMode = { if (appActive || tab.running && !raw) openApp() else tab.rawMode = !raw }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(tab.directory, Modifier.weight(1f), fontFamily = FontFamily.Monospace, maxLines = 1,
                     overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (compact) {
-                    var options by remember { mutableStateOf(false) }
-                    Box {
-                        TextButton(onClick = { options = true }) { Text("操作") }
-                        DropdownMenu(expanded = options, onDismissRequest = { options = false }) {
-                            if (!raw && !followTail) DropdownMenuItem(text = { Text("回到最新") },
-                                onClick = { options = false; followTail = true })
-                            DropdownMenuItem(text = { Text(modeTitle) }, enabled = !tab.exited,
-                                onClick = { options = false; switchMode() })
-                            DropdownMenuItem(text = { Text("关闭标签") }, onClick = { options = false; close() })
-                        }
+                    ToolbarMenuButton(button = { open ->
+                        TextButton(onClick = open) { Text("操作") }
+                    }) { dismiss ->
+                        if (!raw && !followTail) DropdownMenuItem(text = { Text("回到最新") },
+                            onClick = { dismiss(); followTail = true })
+                        DropdownMenuItem(text = { Text(modeTitle) }, enabled = !tab.exited,
+                            onClick = { dismiss(); switchMode() })
+                        DropdownMenuItem(text = { Text("关闭标签") }, onClick = { dismiss(); close() })
                     }
                 } else {
                     if (!raw && !followTail) TextButton(onClick = { followTail = true }) { Text("回到最新") }
                     TextButton(onClick = switchMode, enabled = !tab.exited) { Text(modeTitle) }
                     TextButton(onClick = close) { Text("关闭") }
                 }
+                windowMenu?.invoke()
             }
         }
         if (tab.directoryFallback) Text("快捷方式的工作目录不可用，已打开 $DEBIAN_HOME。",
@@ -790,7 +793,6 @@ private fun FileActions(linux: LinuxEnvironment, notices: SnackbarHostState, vis
     val context = LocalContext.current
     val exchange = remember(linux) { FileExchange(context.contentResolver, linux.home) }
     val scope = rememberCoroutineScope()
-    var menu by remember { mutableStateOf(false) }
     var browse by rememberSaveable { mutableStateOf(false) }
     var exportPath by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var transfer by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -823,17 +825,16 @@ private fun FileActions(linux: LinuxEnvironment, notices: SnackbarHostState, vis
             "已导出 ${path.last()}"
         }
     }
-    if (visible) Box {
-        TextButton(onClick = { menu = true }) { Text("文件") }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            if (transfer != null) {
-                DropdownMenuItem(text = { Text("取消传输") }, onClick = { menu = false; transfer?.cancel() })
-            } else {
-                DropdownMenuItem(text = { Text("导入到 Downloads") }, onClick = {
-                    menu = false; importPicker.launch(arrayOf("*/*"))
-                })
-                DropdownMenuItem(text = { Text("从主目录导出") }, onClick = { menu = false; browse = true })
-            }
+    if (visible) ToolbarMenuButton(button = { open ->
+        TextButton(onClick = open) { Text("文件") }
+    }) { dismiss ->
+        if (transfer != null) {
+            DropdownMenuItem(text = { Text("取消传输") }, onClick = { dismiss(); transfer?.cancel() })
+        } else {
+            DropdownMenuItem(text = { Text("导入到 Downloads") }, onClick = {
+                dismiss(); importPicker.launch(arrayOf("*/*"))
+            })
+            DropdownMenuItem(text = { Text("从主目录导出") }, onClick = { dismiss(); browse = true })
         }
     }
     if (browse) HomePicker(exchange, close = { browse = false }) { path ->

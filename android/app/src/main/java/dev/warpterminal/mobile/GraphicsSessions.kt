@@ -42,6 +42,7 @@ internal class GraphicsTab(val id: Int, val windowId: String, name: String, wait
     var pending by mutableStateOf(waiting)
     var error by mutableStateOf<String?>(null)
     var desktopId by mutableStateOf<String?>(null)
+    var iconPath by mutableStateOf<String?>(null)
     var processId by mutableIntStateOf(0)
     var rendering = ChromiumRendering.AUTOMATIC
     var launcher: Job? = null
@@ -64,7 +65,7 @@ internal class GraphicsSessions(
     var installRevision by mutableStateOf(0)
         private set
     private val preparation = Mutex()
-    private data class WindowMetadata(val title: String, val desktopId: String?, val processId: Int)
+    private data class WindowMetadata(val title: String, val desktopId: String?, val processId: Int, val iconPath: String?)
     private val metadata = mutableMapOf<String, WindowMetadata>()
     private var prepared = false
     private var compositorStarted = false
@@ -478,6 +479,7 @@ internal class GraphicsSessions(
         val info = metadata.remove(id)
         val tab = GraphicsTab(newId(), id, info?.title ?: "Linux 窗口", false).apply {
             desktopId = info?.desktopId
+            iconPath = info?.iconPath
             processId = info?.processId ?: 0
         }
         tabs.add(tab)
@@ -493,7 +495,7 @@ internal class GraphicsSessions(
 
     fun selectWindow(id: String) { tabs.firstOrNull { it.windowId == id }?.let { selected(it.id) } }
 
-    fun metadataChanged(id: String, title: String, desktopId: String?, processId: Int) {
+    fun metadataChanged(id: String, title: String, desktopId: String?, processId: Int, iconPath: String?) {
         probe?.takeIf { it.id == id }?.let {
             if ("Mobile Terminal WebGL OK " in title || "Mobile Terminal WebGL FAIL " in title ||
                 "Mobile Terminal WebGL WEBGL2 " in title) {
@@ -502,9 +504,10 @@ internal class GraphicsSessions(
             return
         }
         val tab = tabs.firstOrNull { it.windowId == id }
-        if (tab == null) metadata[id] = WindowMetadata(title.ifBlank { "Linux 窗口" }, desktopId, processId)
+        if (tab == null) metadata[id] = WindowMetadata(title.ifBlank { "Linux 窗口" }, desktopId, processId, iconPath)
         else {
             if (title.isNotBlank()) tab.title = title
+            if (iconPath != null) tab.iconPath = iconPath
             if (tab.desktopId == null) tab.desktopId = desktopId
             if (tab.processId == 0) tab.processId = processId
         }

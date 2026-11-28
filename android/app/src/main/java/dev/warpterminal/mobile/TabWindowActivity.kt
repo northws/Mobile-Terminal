@@ -4,13 +4,18 @@ import android.app.ActivityManager
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.CancellationException
@@ -52,7 +57,7 @@ class TabWindowActivity : SessionActivity() {
         var tab by remember { mutableStateOf<Int?>(null) }
         var failure by remember(current) { mutableStateOf<String?>(null) }
         var confirm by remember(current) { mutableStateOf<Pair<LinuxApp, ChromiumRendering>?>(null) }
-        var menu by remember { mutableStateOf(false) }
+        var showToolbar by rememberSaveable(current.key) { mutableStateOf(true) }
         var shortcutTab by rememberSaveable { mutableStateOf<Int?>(null) }
         fun attach(id: Int?) {
             ownedTab = id
@@ -122,24 +127,39 @@ class TabWindowActivity : SessionActivity() {
             else null
         val taskLabel = title ?: getString(R.string.app_name)
         LaunchedEffect(taskLabel) { setTaskDescription(ActivityManager.TaskDescription(taskLabel)) }
+        BackHandler(enabled = confirm == null) { finishAndRemoveTask() }
         TabViewport(appearance.size, fullscreen = false, exit = {}) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(taskLabel, Modifier.weight(1f).padding(start = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.titleMedium)
-                Box {
-                    TextButton(onClick = { menu = true }) { Text("窗口") }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text(if (hosted) "收回到主界面" else "打开主界面") },
-                            onClick = { menu = false; returnToMain() })
-                        if (hosted && id != null) DropdownMenuItem(text = { Text("创建桌面快捷方式") },
-                            onClick = { menu = false; shortcutTab = service.shownInWindow(id) })
-                    }
-                }
-            }
-            HorizontalDivider()
             when {
-                hosted && id != null -> HostedTab(service, service.shownInWindow(id), Modifier.weight(1f), false) { next ->
-                    service.windowFor(next)?.takeIf { it != current.key }?.let { WindowLinks.open(this@TabWindowActivity, it) }
+                hosted && id != null -> Box(Modifier.fillMaxSize()) {
+                    val shown = service.shownInWindow(id)
+                    HostedTab(service, shown, Modifier.fillMaxSize(), showToolbar, windowMenu = {
+                        ToolbarMenuButton(button = { open ->
+                            TextButton(onClick = open) { Text("窗口") }
+                        }) { dismiss ->
+                            DropdownMenuItem(text = { Text("隐藏工具栏") },
+                                onClick = { dismiss(); showToolbar = false })
+                            DropdownMenuItem(text = { Text("创建桌面快捷方式") },
+                                onClick = { dismiss(); shortcutTab = shown })
+                            DropdownMenuItem(text = { Text("收回到主界面") },
+                                onClick = { dismiss(); returnToMain() })
+                        }
+                    }) { next ->
+                        service.windowFor(next)?.takeIf { it != current.key }?.let { WindowLinks.open(this@TabWindowActivity, it) }
+                    }
+                    if (!showToolbar) Box(
+                        Modifier.align(Alignment.TopCenter).size(48.dp, 24.dp)
+                            .clickable(role = Role.Button) { showToolbar = true }
+                            .semantics { contentDescription = "显示工具栏" },
+                        contentAlignment = Alignment.TopCenter,
+                    ) {
+                        Surface(shape = RoundedCornerShape(bottomStart = 6.dp, bottomEnd = 6.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh, shadowElevation = 2.dp) {
+                            Box(Modifier.size(36.dp, 12.dp), contentAlignment = Alignment.Center) {
+                                Spacer(Modifier.size(20.dp, 2.dp).background(MaterialTheme.colorScheme.onSurfaceVariant,
+                                    RoundedCornerShape(1.dp)))
+                            }
+                        }
+                    }
                 }
                 failure != null -> Column(Modifier.padding(16.dp)) {
                     Text(checkNotNull(failure))
@@ -155,6 +175,5 @@ class TabWindowActivity : SessionActivity() {
                 launch { service.launchGraphics(app, true, mode, reusePending = false) }
             }
         }
-        BackHandler(enabled = confirm == null) { finishAndRemoveTask() }
     }
 }

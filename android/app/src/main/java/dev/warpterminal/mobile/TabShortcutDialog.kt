@@ -57,9 +57,13 @@ internal fun TabShortcutDialog(service: TerminalService, id: Int, close: () -> U
         }
         loaded = true
     }
-    val recognised = graphics?.desktopId?.takeIf { candidate -> apps.orEmpty().any { it.id == candidate } }
+    val recognised = graphics?.desktopId?.let { candidate ->
+        apps.orEmpty().firstOrNull { it.id == candidate } ?: apps.orEmpty().singleOrNull {
+            it.id.removeSuffix(".desktop").equals(candidate.removeSuffix(".desktop"), ignoreCase = true)
+        }
+    }
     val suggested = known ?: recognised?.let {
-        TabLaunch.Graphics(it, graphics?.rendering ?: ChromiumRendering.AUTOMATIC)
+        TabLaunch.Graphics(it.id, graphics?.rendering ?: ChromiumRendering.AUTOMATIC)
     }
     val picked = apps.orEmpty().firstOrNull { it.id == selectedApp }
     val launch = suggested ?: picked?.let { TabLaunch.Graphics(it.id) }
@@ -110,11 +114,20 @@ internal fun TabShortcutDialog(service: TerminalService, id: Int, close: () -> U
             if (links.canPin && title != null && loaded) TextButton(enabled = !saving, onClick = {
                 saving = true
                 val key = service.keyForTab(id)
+                val iconApp = recognised ?: picked
+                val windowIcon = graphics?.iconPath.takeIf { picked == null }
                 scope.launch {
                     try {
-                        withContext(Dispatchers.IO) { links.save(key, launch) }
-                        if (links.pin(key, title)) {
-                            Toast.makeText(context, "请按桌面提示添加快捷方式", Toast.LENGTH_SHORT).show()
+                        val bitmap = withContext(Dispatchers.IO) {
+                            links.save(key, launch)
+                            if (iconApp == null && windowIcon == null) null else
+                                ShortcutIcon(service.linux.desktopRoot, service.linux.home).load(iconApp, windowIcon, links.iconSize)
+                        }
+                        val result = links.pin(key, title, bitmap)
+                        if (result != WindowLinks.PinResult.FAILED) {
+                            val message = if (result == WindowLinks.PinResult.UPDATED) "已更新桌面快捷方式"
+                                else "请按桌面提示添加快捷方式"
+                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                             close()
                         } else error = "桌面未接受快捷方式请求。"
                     } catch (failure: CancellationException) {

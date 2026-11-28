@@ -30,7 +30,7 @@ import kotlinx.coroutines.withContext
 
 internal const val DEBIAN_USER = "Debian"
 internal const val DEBIAN_HOME = "/home/Debian"
-private const val LEGACY_DEBIAN_HOME = "/home/warp"
+internal const val LEGACY_DEBIAN_HOME = "/home/warp"
 
 internal class LinuxEnvironment(private val context: Context) {
     private val packageInstallation = Mutex()

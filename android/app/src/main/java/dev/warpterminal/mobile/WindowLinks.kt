@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
+import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Bundle
@@ -20,6 +21,7 @@ internal class WindowLinks(private val context: Context) {
     private val preferences = context.getSharedPreferences("tab_shortcuts", Context.MODE_PRIVATE)
     private val shortcuts = context.getSystemService(ShortcutManager::class.java)
     val canPin get() = shortcuts?.isRequestPinShortcutSupported == true
+    val iconSize get() = shortcuts?.let { minOf(it.iconMaxWidth, it.iconMaxHeight) } ?: 128
 
     fun load(key: String): TabLaunch? = preferences.getString(key, null)?.let { value ->
         runCatching {
@@ -48,13 +50,19 @@ internal class WindowLinks(private val context: Context) {
         if (!preferences.edit().putString(key, data.toString()).commit()) throw IOException("无法保存快捷方式")
     }
 
-    fun pin(key: String, title: String): Boolean {
+    enum class PinResult { REQUESTED, UPDATED, FAILED }
+
+    fun pin(key: String, title: String, bitmap: Bitmap?): PinResult {
+        val manager = shortcuts ?: return PinResult.FAILED
         val shortcut = ShortcutInfo.Builder(context, key)
             .setShortLabel(title.take(30).ifBlank { context.getString(R.string.app_name) })
-            .setIcon(Icon.createWithResource(context, R.drawable.ic_launcher))
+            .setIcon(bitmap?.let(Icon::createWithBitmap) ?: Icon.createWithResource(context, R.drawable.ic_launcher))
             .setIntent(Intent(Intent.ACTION_VIEW, address(key), context, TabShortcutActivity::class.java))
             .build()
-        return shortcuts?.requestPinShortcut(shortcut, null) == true
+        if (manager.pinnedShortcuts.any { it.id == key }) {
+            return if (manager.updateShortcuts(listOf(shortcut))) PinResult.UPDATED else PinResult.FAILED
+        }
+        return if (manager.requestPinShortcut(shortcut, null)) PinResult.REQUESTED else PinResult.FAILED
     }
 
     companion object {
