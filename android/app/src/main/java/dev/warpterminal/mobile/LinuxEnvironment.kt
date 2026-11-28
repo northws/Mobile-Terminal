@@ -13,6 +13,11 @@ import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.net.URL
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
+import java.nio.file.LinkOption.NOFOLLOW_LINKS
+import java.nio.file.StandardOpenOption.CREATE_NEW
+import java.nio.file.StandardOpenOption.WRITE
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.HttpsURLConnection
@@ -24,7 +29,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 internal const val DEBIAN_USER = "Debian"
-internal const val DEBIAN_HOME = "/home/warp"
+internal const val DEBIAN_HOME = "/home/Debian"
+private const val LEGACY_DEBIAN_HOME = "/home/warp"
 
 internal class LinuxEnvironment(private val context: Context) {
     private val packageInstallation = Mutex()
@@ -43,6 +49,17 @@ internal class LinuxEnvironment(private val context: Context) {
     internal val hybris = File(context.filesDir, "graphics-hybris")
     internal val acceleration = GraphicsAcceleration(context)
     internal val chromiumBinary get() = File(rootfs, "usr/lib/chromium/chromium")
+
+    fun graphicalWorkingDirectory(pid: Int): String? = if (pid <= 0) null else runCatching {
+        val path = File(Os.readlink("/proc/$pid/cwd")).toPath()
+        val privateHome = home.canonicalFile.toPath()
+        val privateRoot = rootfs.canonicalFile.toPath()
+        when {
+            path.startsWith(privateHome) -> "$DEBIAN_HOME/${privateHome.relativize(path)}".trimEnd('/')
+            path.startsWith(privateRoot) -> "/${privateRoot.relativize(path)}"
+            else -> null
+        }
+    }.getOrNull()
 
     fun installed(): Boolean = marker.isFile && File(rootfs, "usr/bin/bash").isFile
 
@@ -135,8 +152,9 @@ internal class LinuxEnvironment(private val context: Context) {
         }
     }
 
-    fun spawn(): Process = guest(
-        rootfs, "/usr/bin/env", "WARP_PATH_APPEND=$DEBIAN_HOME/.local/bin:$DEBIAN_HOME/.opencode/bin",
+    fun spawn(directory: String = DEBIAN_HOME): Process = guest(
+        rootfs, "/usr/bin/env", "WARP_START_DIRECTORY=$directory",
+        "WARP_PATH_APPEND=$DEBIAN_HOME/.local/bin:$DEBIAN_HOME/.opencode/bin",
         "/opt/warp/warp-android-backend", asDebian = true, graphics = true, allowX11Override = true,
     ).start()
 
@@ -275,6 +293,7 @@ internal class LinuxEnvironment(private val context: Context) {
         allowX11Override: Boolean = false,
         chromiumBackend: ChromiumBackend? = null,
     ): ProcessBuilder {
+        prepareHomeMount(root)
         val account = if (asDebian) prepareAccount(root) else null
         val args = mutableListOf(tawcroot.path, "-s", "-r", root.path)
         for (bind in listOf("/dev:/dev", "/proc:/proc", "/sys:/sys", "${home.path}:$DEBIAN_HOME", "${runnerDir.path}:/opt/warp:ro")) {
@@ -334,6 +353,12 @@ internal class LinuxEnvironment(private val context: Context) {
 
     @Synchronized
     private fun prepareAccount(root: File): Pair<Int, Int> {
+        val hosts = File(root, "etc/hosts").toPath()
+        if (!Files.exists(hosts, NOFOLLOW_LINKS)) try {
+            Files.write(hosts, "127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n".toByteArray(), CREATE_NEW, WRITE)
+        } catch (_: FileAlreadyExistsException) {
+            // Preserve a hosts file created by another process.
+        }
         val passwd = File(root, "etc/passwd")
         fun entry(): List<String>? = passwd.useLines { lines ->
             lines.firstOrNull { it.startsWith("$DEBIAN_USER:") }?.split(':')
@@ -376,8 +401,31 @@ internal class LinuxEnvironment(private val context: Context) {
         }
     }
 
+    @Synchronized
+    private fun prepareHomeMount(root: File) {
+        val parent = File(root, "home").toPath()
+        val mount = File(root, DEBIAN_HOME.removePrefix("/")).toPath()
+        val legacy = File(root, LEGACY_DEBIAN_HOME.removePrefix("/")).toPath()
+        if (!Files.exists(parent, NOFOLLOW_LINKS)) Files.createDirectory(parent)
+        if (!Files.isDirectory(parent, NOFOLLOW_LINKS)) throw IOException("/home 不是可用的目录")
+
+        fun emptyDirectory(path: java.nio.file.Path): Boolean =
+            Files.isDirectory(path, NOFOLLOW_LINKS) && Files.newDirectoryStream(path).use { !it.iterator().hasNext() }
+
+        if (!Files.exists(mount, NOFOLLOW_LINKS)) Files.createDirectory(mount)
+        if (!emptyDirectory(mount)) throw IOException("$DEBIAN_HOME 已有独立内容，无法挂载用户主目录。")
+        if (Files.isSymbolicLink(legacy) &&
+            Files.readSymbolicLink(legacy).toString() in listOf("Debian", DEBIAN_HOME)) return
+        if (Files.exists(legacy, NOFOLLOW_LINKS)) {
+            if (!emptyDirectory(legacy)) throw IOException("$LEGACY_DEBIAN_HOME 已有独立内容，无法创建兼容路径。")
+            Files.delete(legacy)
+        }
+        Os.symlink("Debian", legacy.toString())
+    }
+
     private fun prepareRoot(root: File) {
-        for (path in listOf(DEBIAN_HOME.removePrefix("/"), "opt/warp", "dev", "proc", "sys", "tmp")) {
+        prepareHomeMount(root)
+        for (path in listOf("opt/warp", "dev", "proc", "sys", "tmp")) {
             checkDirectory(File(root, path))
         }
         val network = context.getSystemService(ConnectivityManager::class.java)

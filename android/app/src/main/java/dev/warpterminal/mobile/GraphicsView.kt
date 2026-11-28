@@ -29,7 +29,7 @@ internal class GraphicsView(context: Context, val windowId: String) : SurfaceVie
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         if (ready) {
-            NativeBridge.nativeOnActivitySurfaceChanged(windowId, width, height)
+            if (NativeBridge.isAttached(this)) NativeBridge.nativeOnActivitySurfaceChanged(windowId, width, height)
         } else {
             ready = true
             NativeBridge.attach(this)
@@ -103,14 +103,15 @@ internal class GraphicsView(context: Context, val windowId: String) : SurfaceVie
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val down = event.action == KeyEvent.ACTION_DOWN
-        if (ready && event.keyCode != KeyEvent.KEYCODE_BACK && (down || event.action == KeyEvent.ACTION_UP) &&
+        if (ready && NativeBridge.isAttached(this) && event.keyCode != KeyEvent.KEYCODE_BACK &&
+            (down || event.action == KeyEvent.ACTION_UP) &&
             NativeBridge.nativeOnHardwareKeyEvent(windowId, event.keyCode, down, event.repeatCount)
         ) return true
         return super.dispatchKeyEvent(event)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (!ready) return false
+        if (!ready || !NativeBridge.isAttached(this)) return false
         if (event.isFromSource(InputDevice.SOURCE_MOUSE)) return pointer(event)
         val action = event.actionMasked
         if (action == MotionEvent.ACTION_DOWN) requestFocus()
@@ -127,10 +128,14 @@ internal class GraphicsView(context: Context, val windowId: String) : SurfaceVie
     }
 
     override fun onHoverEvent(event: MotionEvent): Boolean =
-        if (ready && event.isFromSource(InputDevice.SOURCE_MOUSE)) pointer(event) else super.onHoverEvent(event)
+        if (ready && NativeBridge.isAttached(this) && event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+            pointer(event)
+        } else super.onHoverEvent(event)
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean =
-        if (ready && event.isFromSource(InputDevice.SOURCE_MOUSE)) pointer(event) else super.onGenericMotionEvent(event)
+        if (ready && NativeBridge.isAttached(this) && event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+            pointer(event)
+        } else super.onGenericMotionEvent(event)
 
     private fun pointer(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_HOVER_EXIT) return true

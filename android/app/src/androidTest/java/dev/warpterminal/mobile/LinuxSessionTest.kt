@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.nio.file.Files
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
@@ -133,7 +134,9 @@ class LinuxSessionTest {
                 assertEquals("Debian", second.command("whoami", 0).trim())
                 assertEquals("Debian", first.command("whoami", 0).trim())
                 val searchPath = first.command("printf %s \"\$PATH\"", 0).split(':')
-                assertTrue(searchPath.containsAll(listOf("/home/warp/.local/bin", "/home/warp/.opencode/bin")))
+                assertTrue(searchPath.containsAll(listOf("$DEBIAN_HOME/.local/bin", "$DEBIAN_HOME/.opencode/bin")))
+                assertEquals("$DEBIAN_HOME\n", first.command("printf '%s\\n' \"\$HOME\"", 0))
+                assertEquals("$DEBIAN_HOME\n", first.command("getent passwd Debian | cut -d: -f6", 0))
                 assertEquals("你好\n", first.command("printf '你好\\n' | cat", 0))
                 first.command("false", 1)
                 first.command("export WARP_DEVICE_TEST=one", 0)
@@ -149,6 +152,29 @@ class LinuxSessionTest {
         }
     }
 
+    @Test fun legacyHomeAndShortcutDirectoryShareTheExistingFiles() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val linux = LinuxEnvironment(context)
+        linux.install { _, _ -> }
+        val folder = Files.createTempDirectory(linux.home.toPath(), "窗口 测试 ").toFile()
+        val fixture = folder.resolve(".中文").apply { writeText("已有文件") }
+        val start = "$DEBIAN_HOME/${folder.name}"
+        try {
+            Session(linux.spawn(start)).use { session ->
+                session.handshake(start)
+                assertEquals("已有文件", session.command("cat .中文", 0))
+                assertEquals("已有文件", session.command("cat '/home/warp/${folder.name}/.中文'", 0))
+                assertEquals("$DEBIAN_HOME\n", session.command("cd ~ && pwd", 0))
+            }
+            fixture.delete()
+            assertTrue(folder.delete())
+            Session(linux.spawn(start)).use { it.handshake(fallback = true) }
+        } finally {
+            fixture.delete()
+            folder.delete()
+        }
+    }
+
     private class Session(private val child: Process) : AutoCloseable {
         private val source = DataInputStream(child.inputStream.buffered())
         private val sink = DataOutputStream(child.outputStream.buffered())
@@ -158,9 +184,11 @@ class LinuxSessionTest {
 
         fun input(text: String) = sink.writeFrame(TERMINAL_FRAME, text.toByteArray())
 
-        fun handshake() {
-            assertEquals(PROTOCOL_VERSION, until("hello").single().getInt("version"))
-            assertEquals("/home/warp", until("prompt").last().getString("directory"))
+        fun handshake(directory: String = DEBIAN_HOME, fallback: Boolean = false) {
+            val hello = until("hello").single()
+            assertEquals(PROTOCOL_VERSION, hello.getInt("version"))
+            assertEquals(fallback, hello.getBoolean("directory_fallback"))
+            assertEquals(directory, until("prompt").last().getString("directory"))
         }
 
         fun command(command: String, exitCode: Int): String {

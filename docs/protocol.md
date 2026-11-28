@@ -6,7 +6,7 @@
 
 | 方向 | 类型 | 内容 |
 |---|---|---|
-| 后端 → Android | `hello` | `version` 等于 2，且为第一条消息 |
+| 后端 → Android | `hello` | `version` 等于 2，且为第一条消息。可选的 `directory_fallback` 为 `true` 时表示快捷方式的工作目录不可用，Bash 已改从主目录启动 |
 | 后端 → Android | `prompt` | `directory` 是下一条命令的工作目录，Bash 完成提示符绘制后发送 |
 | 后端 → Android | `started` | `command` 来自 Warp Bash preexec 事件 |
 | 后端 → Android | `output` | `text`、`foreground`（可空的 RGB 整数）、`bold` |

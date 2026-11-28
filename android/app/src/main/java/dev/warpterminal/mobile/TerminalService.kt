@@ -1,5 +1,6 @@
 package dev.warpterminal.mobile
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -11,6 +12,7 @@ import android.os.IBinder
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.termux.terminal.KeyHandler
@@ -22,6 +24,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -81,6 +84,8 @@ class TerminalService : Service() {
         private set
     private var nextId = 1
     private val recentTabs = mutableListOf<Int>()
+    private val windowKeys = mutableStateMapOf<Int, String>()
+    private val windowTasks = mutableStateMapOf<Int, Int>()
     private val preferences by lazy { getSharedPreferences("terminal", MODE_PRIVATE) }
 
     override fun onCreate() {
@@ -100,9 +105,6 @@ class TerminalService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(1, notification())
         val action = intent?.action
-        if (action in setOf(ADD_TAB, ADD_TERMINAL_APP, ADD_GRAPHICS, ADD_COMPATIBLE_CHROMIUM) &&
-            needsSudo && !triedSudoUpgrade && linux.online()
-        ) installSudo()
         when (action) {
             INSTALL -> install()
             INSTALL_SUDO -> installSudo()
@@ -121,7 +123,7 @@ class TerminalService : Service() {
                     val rendering = ChromiumRendering.entries.firstOrNull {
                         it.name == intent.getStringExtra(CHROMIUM_RENDERING)
                     } ?: ChromiumRendering.AUTOMATIC
-                    graphics.launchApp(app, chromiumCompatibility = intent.action == ADD_COMPATIBLE_CHROMIUM,
+                    launchGraphics(app, chromiumCompatibility = intent.action == ADD_COMPATIBLE_CHROMIUM,
                         rendering = rendering)
                 }
             }
@@ -170,9 +172,20 @@ class TerminalService : Service() {
         }
     }
 
-    private fun addTab(app: TerminalApp? = null) {
-        if (installation != Installation.Ready || tabs.size >= MAX_TABS) return
-        val tab = TerminalTab(nextId++, linux, scope, app, ::terminalAppChanged, ::sessionEnded)
+    private fun upgradeSudoIfOnline() {
+        if (needsSudo && !triedSudoUpgrade && linux.online()) installSudo()
+    }
+
+    internal fun launchGraphics(app: LinuxApp, chromiumCompatibility: Boolean, rendering: ChromiumRendering,
+        reusePending: Boolean = true): Int? {
+        upgradeSudoIfOnline()
+        return graphics.launchApp(app, chromiumCompatibility, rendering, reusePending)
+    }
+
+    internal fun addTab(app: TerminalApp? = null, directory: String = DEBIAN_HOME): Int? {
+        if (installation != Installation.Ready || tabs.size >= MAX_TABS) return null
+        upgradeSudoIfOnline()
+        val tab = TerminalTab(nextId++, linux, scope, app, ::terminalAppChanged, directory, ::sessionEnded)
         tabs.add(tab)
         selectTab(tab.id)
         interrupted = false
@@ -197,6 +210,7 @@ class TerminalService : Service() {
             }
         }
         updateNotification()
+        return tab.id
     }
 
     internal fun closeTab(tab: TerminalTab) {
@@ -211,16 +225,14 @@ class TerminalService : Service() {
     internal fun selectTab(id: Int) {
         recentTabs.remove(id)
         recentTabs.add(id)
-        selected = id
+        if (windowFor(id) == null) selected = id
     }
 
-    internal fun openTerminalApp(tab: TerminalTab) {
-        showTerminalApp(tab, focus = true)
-    }
+    internal fun openTerminalApp(tab: TerminalTab): Int? = showTerminalApp(tab, focus = true)
 
     internal fun closeTerminalApp(app: TerminalAppTab) {
         if (!terminalAppTabs.remove(app)) return
-        if (selected == app.id && app.session in tabs) selectTab(app.session.id)
+        if ((selected == app.id || app.id in windowTasks) && app.session in tabs) selectTab(app.session.id)
         restoreSelection()
     }
 
@@ -232,19 +244,85 @@ class TerminalService : Service() {
         }
     }
 
-    private fun showTerminalApp(tab: TerminalTab, focus: Boolean) {
-        if (tab !in tabs || tab.exited || !tab.running && !tab.alternate) return
+    private fun showTerminalApp(tab: TerminalTab, focus: Boolean): Int? {
+        if (tab !in tabs || tab.exited || !tab.running && !tab.alternate) return null
         val app = terminalAppTabs.firstOrNull { it.session == tab } ?: run {
             val title = tab.blocks.lastOrNull()?.command?.lineSequence()?.firstOrNull()?.trim()?.take(80)
             TerminalAppTab(nextId++, title.orEmpty().ifBlank { "终端应用" }, tab).also(terminalAppTabs::add)
         }
         if (focus) selectTab(app.id)
+        return app.id
+    }
+
+    internal fun labels(): List<Pair<Int, String>> = (tabs.map { it.id to if (it.exited) "${it.title} · 已结束" else it.title } +
+        terminalAppTabs.map { it.id to it.title } + graphics.tabs.map { it.id to it.title }).sortedBy { it.first }
+
+    internal fun keyForTab(id: Int): String = windowKeys.getOrPut(id) { UUID.randomUUID().toString() }
+
+    internal fun liveTab(key: String): Int? = windowKeys.entries.firstOrNull { it.value == key }?.key
+        ?.takeUnless { id -> tabs.any { it.id == id && it.exited } || graphics.tabs.any { it.id == id && it.error != null } }
+
+    internal fun windowFor(id: Int): String? {
+        val parent = terminalAppTabs.firstOrNull { it.id == id }?.session?.id
+        val owner = when {
+            id in windowTasks -> id
+            parent != null && parent in windowTasks -> parent
+            else -> return null
+        }
+        return windowKeys[owner]
+    }
+
+    internal fun shownInWindow(id: Int): Int =
+        terminalAppTabs.firstOrNull { it.session.id == id && it.id !in windowTasks }?.id ?: id
+
+    internal fun claimWindow(key: String, task: Int, newTab: Int? = null): Int? {
+        val id = newTab ?: liveTab(key) ?: return null
+        if (newTab != null) {
+            windowKeys.entries.firstOrNull { it.value == key && it.key != id }?.key?.let { old ->
+                windowKeys.remove(old)
+                windowTasks.remove(old)
+            }
+            windowKeys[id] = key
+        }
+        windowTasks[id] = task
+        restoreSelection()
+        return id
+    }
+
+    internal fun ownsWindow(id: Int, task: Int) = windowTasks[id] == task
+
+    internal fun attachedTab(key: String, task: Int): Int? =
+        windowKeys.entries.firstOrNull { it.value == key && ownsWindow(it.key, task) }?.key
+
+    internal fun returnWindow(id: Int, task: Int) {
+        if (!ownsWindow(id, task)) return
+        val shown = shownInWindow(id)
+        windowTasks.remove(id)
+        selectTab(shown)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent) {
+        super.onTaskRemoved(rootIntent)
+        if (rootIntent.component?.className != TabWindowActivity::class.java.name) return
+        val key = WindowLinks.windowKey(rootIntent) ?: return
+        val id = windowKeys.entries.firstOrNull { it.value == key }?.key ?: return
+        val task = windowTasks[id] ?: return
+        if (getSystemService(ActivityManager::class.java).appTasks.none {
+            runCatching { it.taskInfo.taskId == task }.getOrDefault(false)
+        }) {
+            returnWindow(id, task)
+        }
     }
 
     private fun restoreSelection() {
-        val openIds = tabs.map(TerminalTab::id) + terminalAppTabs.map(TerminalAppTab::id) + graphics.tabs.map(GraphicsTab::id)
-        recentTabs.retainAll(openIds.toSet())
-        if (selected !in openIds) selected = recentTabs.lastOrNull() ?: 0
+        val openIds = labels().map { it.first }.toSet()
+        windowKeys.keys.retainAll(openIds)
+        windowTasks.keys.retainAll(openIds)
+        recentTabs.retainAll(openIds)
+        if (selected !in openIds || windowFor(selected) != null) {
+            selected = recentTabs.lastOrNull { windowFor(it) == null }
+                ?: openIds.lastOrNull { windowFor(it) == null } ?: 0
+        }
     }
 
     private fun graphicsChanged() {
@@ -302,6 +380,7 @@ class TerminalService : Service() {
         internal const val INSTALL = "install"
         internal const val INSTALL_SUDO = "install_sudo"
         internal const val ADD_TAB = "add_tab"
+        internal const val KEEP_ALIVE = "keep_alive"
         internal const val ADD_TERMINAL_APP = "add_terminal_app"
         internal const val INSTALL_GRAPHICS = "install_graphics"
         internal const val ADD_GRAPHICS = "add_graphics"
@@ -320,8 +399,9 @@ internal class TerminalTab(
     val id: Int,
     private val linux: LinuxEnvironment,
     private val scope: CoroutineScope,
-    private val app: TerminalApp? = null,
+    val app: TerminalApp? = null,
     private val onTerminalAppChanged: (TerminalTab, Boolean) -> Unit = { _, _ -> },
+    private val startDirectory: String = DEBIAN_HOME,
     private val onExit: () -> Unit,
 ) {
     val title = "${app?.name ?: "Bash"} $id"
@@ -337,6 +417,11 @@ internal class TerminalTab(
     val blocks = mutableStateListOf<CommandBlock>()
     var draft by mutableStateOf("")
     var replyDraft by mutableStateOf("")
+    var followTail = true
+    var scrollIndex = 0
+    var scrollOffset = 0
+    var directoryFallback by mutableStateOf(false)
+        private set
     var statusLine by mutableStateOf<String?>(null)
         private set
     val running get() = !ready && !closing && !exited && blocks.lastOrNull()?.let { it.code == null } == true
@@ -370,7 +455,7 @@ internal class TerminalTab(
             try {
                 val running = withContext(Dispatchers.IO) {
                     linux.prepareRunner()
-                    linux.spawn()
+                    linux.spawn(startDirectory)
                 }
                 process = running
                 timeout = launch {
@@ -405,6 +490,9 @@ internal class TerminalTab(
                         if (hello?.kind != JSON_FRAME || hello.json().optString("type") != "hello" ||
                             hello.json().optInt("version") != PROTOCOL_VERSION
                         ) throw IOException("无法与 Warp 后端建立会话")
+                        withContext(Dispatchers.Main.immediate) {
+                            directoryFallback = hello.json().optBoolean("directory_fallback")
+                        }
                         while (true) {
                             val frame = source.readFrame() ?: break
                             withContext(Dispatchers.Main.immediate) { receive(frame) }

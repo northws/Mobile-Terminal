@@ -9,7 +9,8 @@ patches="$(cd "$(dirname "$0")/../upstream" && pwd)"
 project="$(dirname "$patches")"
 
 cd "$tawc"
-for patch_file in "$patches/tawc-libtool.patch" "$patches/tawc-tabs.patch" "$patches/tawc-libhybris.patch"; do
+for patch_file in "$patches/tawc-libtool.patch" "$patches/tawc-tabs.patch" "$patches/tawc-libhybris.patch" \
+    "$patches/tawc-window-origin.patch"; do
     if ! git apply --reverse --check "$patch_file" 2>/dev/null; then
         git apply "$patch_file"
     fi

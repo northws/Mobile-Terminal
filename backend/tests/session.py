@@ -10,10 +10,14 @@ import time
 
 
 class Terminal:
-    def __init__(self, executable, home):
+    def __init__(self, executable, home, directory=None):
+        environment = {**os.environ, "HOME": home, "LANG": "C.UTF-8"}
+        environment.pop("WARP_START_DIRECTORY", None)
+        if directory is not None:
+            environment["WARP_START_DIRECTORY"] = directory
         self.process = subprocess.Popen(
             [executable], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            env={**os.environ, "HOME": home, "LANG": "C.UTF-8"}, bufsize=0,
+            env=environment, bufsize=0,
         )
         self.input = self.process.stdin
         self.output = self.process.stdout
@@ -69,11 +73,15 @@ class Terminal:
 def main(executable):
     with tempfile.TemporaryDirectory() as home:
         first = Terminal(executable, home)
-        second = Terminal(executable, home)
+        nested = os.path.join(home, "工作 目录")
+        os.mkdir(nested)
+        second = Terminal(executable, home, nested)
+        missing = Terminal(executable, home, os.path.join(home, "missing"))
         try:
-            for terminal in (first, second):
-                assert terminal.until("hello") == [{"type": "hello", "version": 2}]
-                assert terminal.until("prompt")[-1]["directory"] == home
+            for terminal, directory, fallback in ((first, home, False), (second, nested, False), (missing, home, True)):
+                assert terminal.until("hello") == [{"type": "hello", "version": 2, "directory_fallback": fallback}]
+                assert terminal.until("prompt")[-1]["directory"] == directory
+            assert second.command("printf '%s\\n' \"$HOME\"; cd ~; pwd").splitlines() == [home, home]
             assert first.command("printf '你好\\n' | cat") == "你好\n"
             first.command("false", 1)
             first.command("mkdir -p nested && cd nested && export WARP_TEST=one")
@@ -132,6 +140,7 @@ def main(executable):
         finally:
             first.close()
             second.close()
+            missing.close()
     print("Bash PTY, exit codes, Ctrl+C, resize, progress, OpenCode startup probes and independent tabs passed.")
 
 

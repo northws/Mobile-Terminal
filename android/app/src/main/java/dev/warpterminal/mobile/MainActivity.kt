@@ -1,6 +1,7 @@
 package dev.warpterminal.mobile
 
 import android.content.ComponentName
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
@@ -28,7 +29,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -65,8 +65,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class MainActivity : ComponentActivity() {
+abstract class SessionActivity : ComponentActivity() {
+    @Composable
+    internal abstract fun SessionContent(
+        service: TerminalService, bars: WindowInsetsControllerCompat, appearance: Appearance,
+        changeAppearance: (Appearance) -> Unit,
+    )
+
     private var terminal by mutableStateOf<TerminalService?>(null)
+    protected val boundService get() = terminal
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
             terminal = (service as TerminalService.LocalBinder).service
@@ -83,8 +90,15 @@ class MainActivity : ComponentActivity() {
         bindService(Intent(this, TerminalService::class.java), connection, Context.BIND_AUTO_CREATE)
         setContent {
             val prefs = remember { getSharedPreferences("appearance", MODE_PRIVATE) }
-            var appearance by remember { mutableStateOf(Appearance.restore(
-                prefs.getString("palette", null), prefs.getString("size", null))) }
+            fun readAppearance() = Appearance.restore(prefs.getString("palette", null), prefs.getString("size", null))
+            var appearance by remember { mutableStateOf(readAppearance()) }
+            DisposableEffect(prefs) {
+                val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+                    appearance = readAppearance()
+                }
+                prefs.registerOnSharedPreferenceChangeListener(listener)
+                onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+            }
             val bars = remember { WindowCompat.getInsetsController(window, window.decorView) }
             LaunchedEffect(appearance.palette) {
                 bars.isAppearanceLightStatusBars = appearance.palette == Palette.Paper
@@ -98,18 +112,18 @@ class MainActivity : ComponentActivity() {
                             CircularProgressIndicator()
                         }
                     } else {
-                        TerminalHome(service, bars, appearance, changeAppearance = { next ->
+                        SessionContent(service, bars, appearance, changeAppearance = { next ->
                             appearance = next
                             prefs.edit().putString("palette", next.palette.name).putString("size", next.size.name).apply()
-                        }) { intent ->
-                            ContextCompat.startForegroundService(
-                                this, intent.setClass(this, TerminalService::class.java),
-                            )
-                        }
+                        })
                     }
                 }
             }
         }
+    }
+
+    internal fun startTerminal(intent: Intent) {
+        ContextCompat.startForegroundService(this, intent.setClass(this, TerminalService::class.java))
     }
 
     override fun onDestroy() {
@@ -118,10 +132,19 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+class MainActivity : SessionActivity() {
+    @Composable
+    internal override fun SessionContent(
+        service: TerminalService, bars: WindowInsetsControllerCompat, appearance: Appearance,
+        changeAppearance: (Appearance) -> Unit,
+    ) = TerminalHome(service, bars, appearance, changeAppearance, ::startTerminal)
+}
+
 @Composable
 private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerCompat, appearance: Appearance,
     changeAppearance: (Appearance) -> Unit, start: (Intent) -> Unit) {
     val notices = remember { SnackbarHostState() }
+    val activity = LocalContext.current as Activity
     val tab = service.tabs.firstOrNull { it.id == service.selected }
     val graphics = service.graphics
     val window = graphics.tabs.firstOrNull { it.id == service.selected }
@@ -146,19 +169,17 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
     BackHandler(enabled = fullscreen && !imeOpen) { owner = null }
     var more by remember { mutableStateOf(false) }
     var settings by rememberSaveable { mutableStateOf(false) }
-    val commandBlockStates = rememberSaveableStateHolder()
-    val sessionIds = service.tabs.map(TerminalTab::id)
-    var previousSessionIds by rememberSaveable { mutableStateOf(emptyList<Int>()) }
-    LaunchedEffect(sessionIds) {
-        (previousSessionIds - sessionIds.toSet()).forEach(commandBlockStates::removeState)
-        previousSessionIds = sessionIds
-    }
+    var shortcutTab by rememberSaveable { mutableStateOf<Int?>(null) }
     var menu by remember { mutableStateOf(false) }
     var showApps by rememberSaveable { mutableStateOf(false) }
     var showCommand by rememberSaveable { mutableStateOf(false) }
     var confirmChromium by remember { mutableStateOf<LinuxApp?>(null) }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(service.selected) { keyboard?.hide() }
+    fun activateTab(id: Int) {
+        val windowKey = service.windowFor(id)
+        if (windowKey == null) service.selectTab(id) else WindowLinks.open(activity, windowKey)
+    }
     fun bash() = start(Intent(TerminalService.ADD_TAB))
     fun openApp(app: TerminalApp) {
         keyboard?.hide()
@@ -202,6 +223,15 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
                 DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
                     DropdownMenuItem(text = { Text("当前标签全屏") }, enabled = selected != null,
                         onClick = { more = false; owner = selected })
+                    DropdownMenuItem(text = { Text("在独立窗口打开") },
+                        enabled = selected != null && tab?.exited != true && window?.error == null,
+                        onClick = {
+                            more = false
+                            keyboard?.hide()
+                            selected?.let { WindowLinks.open(activity, service.keyForTab(it), adjacent = true) }
+                        })
+                    DropdownMenuItem(text = { Text("创建桌面快捷方式") }, enabled = selected != null,
+                        onClick = { more = false; shortcutTab = selected })
                     DropdownMenuItem(text = { Text("外观设置") }, onClick = { more = false; settings = true })
                     if (service.needsSudo) {
                         DropdownMenuItem(
@@ -233,50 +263,27 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
             is Installation.Failed -> InstallCard("安装未完成", state.message, "重试") {
                 start(Intent(TerminalService.INSTALL))
             }
-            Installation.Ready -> if (tab == null && window == null && application == null) {
-                InstallCard(if (service.interrupted) "上次会话已结束" else "打开本地终端",
-                    "Linux 主目录保存在此设备上。", "打开 Bash", ::bash)
-            } else {
+            Installation.Ready -> {
                 if (!fullscreen) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    val labels = service.tabs.map { it.id to if (it.exited) "${it.title} · 已结束" else it.title } +
-                        service.terminalAppTabs.map { it.id to it.title } + graphics.tabs.map { it.id to it.title }
-                    labels.sortedBy { it.first }.forEach { (id, label) ->
+                    service.labels().forEach { (id, label) ->
+                        val detached = service.windowFor(id) != null
                         FilterChip(selected = id == service.selected,
-                            onClick = { service.selectTab(id) },
-                            label = { Text(label, Modifier.widthIn(max = 180.dp), maxLines = 1,
+                            onClick = { activateTab(id) },
+                            label = { Text(if (detached) "$label · 独立窗口" else label, Modifier.widthIn(max = 220.dp), maxLines = 1,
                                 overflow = TextOverflow.MiddleEllipsis) })
                     }
                 }
-                if (tab != null) {
-                    key(tab.id) {
-                        if (tab.showingStartupApp) {
-                            TerminalAppPanel(tab.title, tab, Modifier.weight(1f), fullscreen, closesSession = true) {
-                                service.closeTab(tab)
-                            }
-                        } else {
-                            commandBlockStates.SaveableStateProvider(tab.id) {
-                                SessionPanel(tab, Modifier.weight(1f), fullscreen,
-                                    appActive = tab.alternate || service.terminalAppTabs.any { it.session == tab },
-                                    openApp = { service.openTerminalApp(tab) },
-                                    close = { service.closeTab(tab) })
-                            }
-                        }
-                    }
-                } else if (application != null) {
-                    key(application.id) {
-                        TerminalAppPanel(application.title, application.session, Modifier.weight(1f), fullscreen) {
-                            service.closeTerminalApp(application)
-                        }
-                    }
-                } else if (window != null) {
-                    key(window.id) { GraphicsPanel(window, Modifier.weight(1f), fullscreen) { graphics.close(window) } }
-                }
+                if (selected == null) {
+                    InstallCard(if (service.interrupted) "上次会话已结束" else "打开本地终端",
+                        "Linux 主目录保存在此设备上。", "打开 Bash", ::bash)
+                } else HostedTab(service, selected, Modifier.weight(1f), fullscreen, ::activateTab)
             }
         }
         SnackbarHost(notices)
     }
+    shortcutTab?.let { id -> TabShortcutDialog(service, id) { shortcutTab = null } }
     if (settings) AppearanceDialog(appearance, changeAppearance) { settings = false }
     if (showCommand && service.installation == Installation.Ready) {
         TerminalCommandPicker(close = { showCommand = false }, open = {
@@ -294,11 +301,20 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
             })
     }
     confirmChromium?.let { app ->
-        val gpu = service.graphics.acceleration
+        ChromiumLaunchConfirmation(service.graphics.acceleration, cancel = { confirmChromium = null }) { rendering ->
+            confirmChromium = null
+            openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, rendering)
+        }
+    }
+}
+
+@Composable
+internal fun ChromiumLaunchConfirmation(gpu: GraphicsAcceleration, preferred: ChromiumRendering = ChromiumRendering.AUTOMATIC,
+    cancel: () -> Unit, launch: (ChromiumRendering) -> Unit) {
         val result = gpu.result(GpuPath.CHROMIUM)?.takeIf { gpu.automatic }
         val webGl2Only = result?.webGl2Only == true
         AlertDialog(
-            onDismissRequest = { confirmChromium = null },
+            onDismissRequest = cancel,
             title = { Text("以兼容模式启动 Chromium？") },
             text = {
                 Column {
@@ -307,45 +323,58 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
                         Spacer(Modifier.height(8.dp))
                         Text("Adreno 已通过 WebGL 2 检测。WebGL 1 仍无法使用。")
                         TextButton(onClick = {
-                            confirmChromium = null
-                            openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.WEBGL2)
+                            launch(ChromiumRendering.WEBGL2)
                         }) { Text("WebGL 2 硬件启动") }
                     }
                     if (result?.xwaylandCompositor?.let(gpu::canProbeChromium) == true) {
                         TextButton(onClick = {
-                            confirmChromium = null
-                            openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.XWAYLAND_COMPOSITING)
+                            launch(ChromiumRendering.XWAYLAND_COMPOSITING)
                         }) { Text("XWayland 硬件合成") }
                     }
                     if (result?.softwareCompositor?.let(gpu::canProbeChromium) == true) {
                         TextButton(onClick = {
-                            confirmChromium = null
-                            openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.SOFTWARE_COMPOSITING)
+                            launch(ChromiumRendering.SOFTWARE_COMPOSITING)
                         }) { Text("软件合成（保留 WebGL 加速）") }
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmChromium = null
-                    openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app)
-                }) { Text("兼容启动") }
+                TextButton(onClick = { launch(preferred) }) {
+                    Text(if (preferred == ChromiumRendering.AUTOMATIC) "兼容启动" else "按快捷方式设置启动")
+                }
             },
             dismissButton = {
                 Row {
-                    TextButton(onClick = { confirmChromium = null }) { Text("取消") }
-                    TextButton(onClick = {
-                        confirmChromium = null
-                        openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, ChromiumRendering.SOFTWARE)
-                    }) { Text("软件启动") }
+                    TextButton(onClick = cancel) { Text("取消") }
+                    TextButton(onClick = { launch(ChromiumRendering.SOFTWARE) }) { Text("软件启动") }
                 }
             },
         )
+}
+
+@Composable
+internal fun HostedTab(service: TerminalService, id: Int, modifier: Modifier, fullscreen: Boolean,
+    activate: (Int) -> Unit) = key(id) {
+    val terminal = service.tabs.firstOrNull { it.id == id }
+    val application = service.terminalAppTabs.firstOrNull { it.id == id }
+    val graphics = service.graphics.tabs.firstOrNull { it.id == id }
+    when {
+        terminal?.showingStartupApp == true -> TerminalAppPanel(terminal.title, terminal, modifier,
+            fullscreen, closesSession = true) { service.closeTab(terminal) }
+        terminal != null -> SessionPanel(terminal, modifier, fullscreen,
+            appActive = terminal.alternate || service.terminalAppTabs.any { it.session == terminal },
+            openApp = { service.openTerminalApp(terminal)?.let(activate) },
+            close = { service.closeTab(terminal) })
+        application != null -> TerminalAppPanel(application.title, application.session, modifier, fullscreen) {
+            service.closeTerminalApp(application)
+        }
+        graphics != null -> GraphicsPanel(graphics, modifier, fullscreen) { service.graphics.close(graphics) }
+        else -> Unit
     }
 }
 
 @Composable
-private fun TabViewport(size: TerminalSize, fullscreen: Boolean, exit: () -> Unit,
+internal fun TabViewport(size: TerminalSize, fullscreen: Boolean, exit: () -> Unit,
     content: @Composable ColumnScope.() -> Unit) {
     Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
         CompositionLocalProvider(LocalTerminalSize provides size) {
@@ -558,9 +587,16 @@ private fun SessionPanel(
     close: () -> Unit,
 ) {
     val raw = tab.rawMode && !appActive
-    val state = rememberLazyListState()
-    var followTail by rememberSaveable { mutableStateOf(true) }
+    val state = rememberLazyListState(tab.scrollIndex, tab.scrollOffset)
+    var followTail by remember { mutableStateOf(tab.followTail) }
     var outputHeight by remember { mutableIntStateOf(0) }
+    LaunchedEffect(state) {
+        snapshotFlow { state.firstVisibleItemIndex to state.firstVisibleItemScrollOffset }.collect { (index, offset) ->
+            tab.scrollIndex = index
+            tab.scrollOffset = offset
+        }
+    }
+    SideEffect { tab.followTail = followTail }
     val manualScroll = remember(state) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -572,25 +608,35 @@ private fun SessionPanel(
         }
     }
     Column(modifier) {
-        if (!fullscreen) Row(
-            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(start = 16.dp, end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(tab.directory, Modifier.weight(1f), fontFamily = FontFamily.Monospace, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (!raw && !followTail) {
-                TextButton(onClick = { followTail = true }) { Text("回到最新") }
-            }
-            if (appActive) {
-                TextButton(onClick = openApp) { Text("打开终端应用") }
-            } else {
-                TextButton(onClick = { if (tab.running && !raw) openApp() else tab.rawMode = !raw },
-                    enabled = !tab.exited) {
-                    Text(if (raw) "命令块" else "终端")
+        if (!fullscreen) BoxWithConstraints(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
+            .padding(start = 12.dp, end = 4.dp)) {
+            val compact = maxWidth < 400.dp
+            val modeTitle = if (appActive) "打开终端应用" else if (raw) "命令块" else "终端"
+            val switchMode = { if (appActive || tab.running && !raw) openApp() else tab.rawMode = !raw }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(tab.directory, Modifier.weight(1f), fontFamily = FontFamily.Monospace, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (compact) {
+                    var options by remember { mutableStateOf(false) }
+                    Box {
+                        TextButton(onClick = { options = true }) { Text("操作") }
+                        DropdownMenu(expanded = options, onDismissRequest = { options = false }) {
+                            if (!raw && !followTail) DropdownMenuItem(text = { Text("回到最新") },
+                                onClick = { options = false; followTail = true })
+                            DropdownMenuItem(text = { Text(modeTitle) }, enabled = !tab.exited,
+                                onClick = { options = false; switchMode() })
+                            DropdownMenuItem(text = { Text("关闭标签") }, onClick = { options = false; close() })
+                        }
+                    }
+                } else {
+                    if (!raw && !followTail) TextButton(onClick = { followTail = true }) { Text("回到最新") }
+                    TextButton(onClick = switchMode, enabled = !tab.exited) { Text(modeTitle) }
+                    TextButton(onClick = close) { Text("关闭") }
                 }
             }
-            TextButton(onClick = close) { Text("关闭") }
         }
+        if (tab.directoryFallback) Text("快捷方式的工作目录不可用，已打开 $DEBIAN_HOME。",
+            Modifier.padding(horizontal = 12.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
         tab.error?.let { Text(it, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
         if (raw) {
             TerminalSurface(tab, Modifier.weight(1f))

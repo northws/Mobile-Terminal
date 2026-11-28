@@ -45,7 +45,7 @@ pub fn duplicate(fd: RawFd) -> io::Result<File> {
 }
 
 impl Pty {
-    pub fn spawn(home: &Path, session: SessionId, columns: u16, rows: u16) -> io::Result<Self> {
+    pub fn spawn(home: &Path, directory: &Path, session: SessionId, columns: u16, rows: u16) -> io::Result<Self> {
         let mut master = -1;
         let mut slave = -1;
         result(unsafe {
@@ -72,8 +72,9 @@ impl Pty {
             .arg("--noprofile")
             .arg("--rcfile").arg(format!("/proc/self/fd/{startup_fd}"))
             .arg("-i")
-            .current_dir(home)
+            .current_dir(directory)
             .env("HOME", home)
+            .env_remove("WARP_START_DIRECTORY")
             .env("TERM", "xterm-256color")
             .env("COLORTERM", "truecolor")
             .env("WARP_HONOR_PS1", "1")

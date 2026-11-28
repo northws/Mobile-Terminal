@@ -24,8 +24,8 @@ android {
         manifestPlaceholders["appLabel"] = "@string/app_name"
         minSdk = 29
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.2.12"
+        versionCode = 15
+        versionName = "0.2.13"
         ndk.abiFilters.add("arm64-v8a")
         buildConfigField("String", "DEBIAN_URL", "\"$debianUrl\"")
         buildConfigField("String", "DEBIAN_SHA256", "\"${revisions.getValue("DEBIAN_SHA256")}\"")

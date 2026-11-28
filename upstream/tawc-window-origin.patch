@@ -1,0 +1,93 @@
+--- a/compositor/src/compositor.rs
++++ b/compositor/src/compositor.rs
+@@ -795,7 +795,10 @@
+             return;
+         };
+         let (title, app_id) = xdg_toplevel_metadata(toplevel);
+-        self.update_host_window_metadata(&host_id, title, app_id);
++        let pid = toplevel.wl_surface().client()
++            .and_then(|client| client.get_credentials(&self.display_handle).ok())
++            .map(|credentials| credentials.pid);
++        self.update_host_window_metadata(&host_id, title, app_id, pid);
+     }
+ 
+     pub fn x11_surface_host(&self, surface: &X11Surface) -> Option<ActivityId> {
+@@ -897,6 +900,7 @@
+         host_id: &ActivityId,
+         title: String,
+         app_id: String,
++        pid: Option<i32>,
+     ) {
+         let old = self.window_metadata.get(host_id);
+         let desktop = if old.is_some_and(|m| m.app_id == app_id) {
+@@ -931,7 +935,7 @@
+             return;
+         }
+         self.window_metadata.insert(host_id.clone(), metadata.clone());
+-        crate::update_window_metadata_from_native(host_id, &metadata);
++        crate::update_window_metadata_from_native(host_id, &metadata, pid);
+     }
+ 
+     fn resolve_cached_app_metadata(&mut self, app_id: &str) -> Option<launcher::DesktopAppMetadata> {
+--- a/compositor/src/xwayland.rs
++++ b/compositor/src/xwayland.rs
+@@ -618,7 +618,9 @@
+         window
+             .user_data()
+             .insert_if_missing(|| PendingHost(std::cell::RefCell::new(Some(assignment.host.clone()))));
+-        self.update_host_window_metadata(&assignment.host, window.title(), window.class());
++        self.update_host_window_metadata(
++            &assignment.host, window.title(), window.class(), window.pid().map(|pid| pid as i32),
++        );
+         self.toplevels_changed = true;
+         if assignment.spawn_activity {
+             crate::spawn_activity_from_native(&assignment.host);
+@@ -631,7 +633,9 @@
+         window
+             .user_data()
+             .insert_if_missing(|| PendingHost(std::cell::RefCell::new(Some(assignment.host.clone()))));
+-        self.update_host_window_metadata(&assignment.host, window.title(), window.class());
++        self.update_host_window_metadata(
++            &assignment.host, window.title(), window.class(), window.pid().map(|pid| pid as i32),
++        );
+         self.toplevels_changed = true;
+         if assignment.spawn_activity {
+             crate::spawn_activity_from_native(&assignment.host);
+@@ -674,7 +678,9 @@
+         let Some(host) = self.x11_surface_host(&window) else {
+             return;
+         };
+-        self.update_host_window_metadata(&host, window.title(), window.class());
++        self.update_host_window_metadata(
++            &host, window.title(), window.class(), window.pid().map(|pid| pid as i32),
++        );
+     }
+ 
+     fn configure_request(
+--- a/compositor/src/lib.rs
++++ b/compositor/src/lib.rs
+@@ -1430,6 +1430,7 @@
+ pub fn update_window_metadata_from_native(
+     activity_id: &str,
+     metadata: &compositor::WindowMetadata,
++    pid: Option<i32>,
+ ) {
+     with_native_bridge("updateWindowMetadata", |env, class| {
+         let id_jstr = env.new_string(activity_id)?;
+@@ -1441,7 +1442,7 @@
+         env.call_static_method(
+             class,
+             "updateWindowMetadata",
+-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
++            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V",
+             &[
+                 (&id_jstr).into(),
+                 (&title_jstr).into(),
+@@ -1449,6 +1450,7 @@
+                 (&desktop_id_jstr).into(),
+                 (&desktop_name_jstr).into(),
+                 (&icon_path_jstr).into(),
++                JValue::Int(pid.unwrap_or_default()),
+             ],
+         )?;
+         Ok(())

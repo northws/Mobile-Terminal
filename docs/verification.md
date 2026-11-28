@@ -1,5 +1,23 @@
 # Mobile Terminal 验证记录
 
+## 0.2.13 Debian 主目录、独立窗口和桌面快捷方式
+
+2026-11-28，Debian / WSL2 完成 ARM64 Linux 后端、TAWC 合成器与 Android 调试 APK 构建。8 项 Android JVM 测试、2 项 Rust 单元测试及 Bash PTY 回归通过，回归覆盖中文和空格目录、工作目录删除后的回退及 `$HOME`。发布 APK 的包名为 `dev.warpterminal.mobile`，版本为 `0.2.13`，版本代码为 `15`，支持 ARM64 Android 10 及以上版本。APK v2 签名通过，签名证书与 0.2.12 一致。SHA-256 为 `d56751c13631f6d735c4efb7a8bb6417fec6e8a0013baff0b31896bad7c1d57a`。
+
+通过 USB ADB 在荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）使用并存测试包验收。
+
+| 场景 | 真机结果 |
+|---|---|
+| 首次安装 | 在新的并存包内通过 USB 预置经 SHA-256 校验的锁定 Debian 归档。新版安装器完成解包、APT 软件包安装和 Bash 自检。默认账户是 `Debian`，主目录为 `/home/Debian`。 |
+| 离线覆盖安装 | 从 `/home/warp` 升级后，账户记录、Bash 起点和 `$HOME` 均为 `/home/Debian`，`/home/warp` 兼容入口可读取同一文件。中文文件和隐藏配置的 SHA-256 前后一致。测试确认 `sudo -n id -u` 离线返回 `0`，文件交换的符号链接边界和取消清理通过。 |
+| PC 模式 | 主界面和独立 Bash 分别出现在两个 Android 任务中。两次实测的 Bash PID 均为 `7289`，独立窗口报告 `stty size` 为 `27 110`，收回后为 `24 110`。命令草稿和历史随同会话保留。 |
+| Vim | Vim 在主界面写入未保存行，移到独立窗口后仍显示该行。使用 Vim 保存，ADB 从测试包主目录读回 `keeponmove`。 |
+| Mousepad | 独立窗口显示 Wayland 编辑器。通过荣耀输入法选中「你好」并在编辑器中看到文字。「关闭标签」弹出保存确认，取消后仍显示未保存标记。点击 PC 窗口的 × 后，编辑器带着未保存内容收回主界面。 |
+| XWayland 小窗 | xeyes 独立任务从全屏切回 PC 浮动窗口，主界面仍显示 Vim。鼠标事件使瞳孔移动。缩窗后仍可见旧眼睛轮廓，移鼠标重绘后轮廓残影仍在。 |
+| 桌面固定快捷方式 | 荣耀桌面显示「添加到主屏幕」并接受 Bash 图标。结束测试包进程后，在飞行模式和关闭 Wi-Fi 的状态下点击图标，Bash 从保存的 `/home/Debian/.window-qa/subdir` 启动。再次点击复用同一个 Android 任务。荣耀系统在该次冷启动中使用全屏呈现独立任务。 |
+
+首次安装测试和离线覆盖后的 8 项 Android 仪器测试均通过。0.2.13 并存包覆盖安装后，飞行模式下再次通过 8 项仪器测试，中文文件和隐藏配置的哈希一致，桌面图标冷启动和重复点击均通过。既有 PC 模式实测的 87 项随包资源和原生库与发布 APK 逐项一致。ADB 日志及截图保存在 `build/window-qa/` 和 `build/release-v0.2.13/`。其余待验收项目为普通 Android 分屏和小窗、最近任务划除、设备重启跨会话、OpenCode 图标、Chromium 图标和应用卸载后的恢复提示。
+
 ## Debian 默认用户与 sudo
 
 2026-11-26 验证 Bash、终端应用和桌面应用的默认启动账户。主目录继续挂载于 `/home/warp`，Debian 内的管理命令使用免密码 `sudo`。

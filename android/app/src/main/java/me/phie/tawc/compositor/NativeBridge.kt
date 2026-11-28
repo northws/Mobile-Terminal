@@ -67,8 +67,9 @@ internal object NativeBridge {
     @JvmStatic fun onToplevelCountChanged(count: Int) = Unit
     @JvmStatic fun setActivityFullscreen(id: String, fullscreen: Boolean) = Unit
     @JvmStatic fun updateWindowMetadata(id: String, title: String, appId: String,
-                                        desktopId: String, desktopName: String, icon: String) {
-        dispatch { titleChanged(id, title.ifBlank { desktopName.ifBlank { appId } }) }
+                                        desktopId: String, desktopName: String, icon: String, pid: Int) {
+        val launchId = desktopId.ifBlank { appId.takeIf { it.equals("xeyes", true) }?.lowercase().orEmpty() }
+        dispatch { metadataChanged(id, title.ifBlank { desktopName.ifBlank { appId } }, launchId.ifBlank { null }, pid) }
     }
     @JvmStatic fun onShowKeyboard(id: String) { view(id) { showKeyboard() } }
     @JvmStatic fun onHideKeyboard(id: String) { view(id) { hideKeyboard() } }

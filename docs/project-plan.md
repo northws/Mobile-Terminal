@@ -4,7 +4,7 @@
 
 Android 会话服务持有 TAWC 合成器和每个 Linux 主窗口的标签状态。Bash 与应用列表共用 tawcroot 的 Wayland 和 X11 套接字绑定。Android 端只为当前图形标签绑定 `SurfaceView`。TAWC 保留窗口与弹窗，并通过原生回调通知 Android 新建、更新和移除标签。
 
-图形程序和字体通过 Debian APT 单独安装。图形入口和终端共用 `/home/warp`。图形示例用 Mousepad 验证 Wayland 文本输入与文件保存，用 xeyes 验证 XWayland 指针和 Bash 前后台启动。
+图形程序和字体通过 Debian APT 单独安装。图形入口和终端共用 `/home/Debian`。图形示例用 Mousepad 验证 Wayland 文本输入与文件保存，用 xeyes 验证 XWayland 指针和 Bash 前后台启动。
 
 ## 首版交付
 
@@ -20,7 +20,7 @@ Android 会话服务持有 TAWC 合成器和每个 Linux 主窗口的标签状�
 | `scripts` | 环境检查、依赖准备、打包和测试 |
 | `docs` | 协议、阶段验收与验证记录 |
 
-tawcroot 随 APK 安装至 Android 原生库目录，启动 Debian 内的后端。安装器在临时目录验证并展开 rootfs，执行 Bash 握手自检，再提交环境。失败后保留可重试的下载，用户主目录独立挂载为 `/home/warp`。Bash、TUI 和图形应用默认使用普通用户 `Debian`。初装包括 `sudo`；旧环境启动时保留主目录并创建该账户，联网补装缺少的 `sudo`。
+tawcroot 随 APK 安装至 Android 原生库目录，启动 Debian 内的后端。安装器在临时目录验证并展开 rootfs，执行 Bash 握手自检，再提交环境。失败后保留可重试的下载。用户主目录独立挂载为 `/home/Debian`，`/home/warp` 兼容路径指向同一份数据。Bash、TUI 和图形应用默认使用普通用户 `Debian`。初装包括 `sudo`，旧环境可联网补装。
 
 每个标签运行一个后端及一个 Bash PTY。后端通过 Warp 的 Bash 事件标记命令开始、结束与提示符，经版本化标准输入输出帧与 Android 通信。Android 服务保留会话，界面重连时读取当前状态。全屏应用使用终端网格。文件输入输出使用系统文件选择器和流式复制。
 

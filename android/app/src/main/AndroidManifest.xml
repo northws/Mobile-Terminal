@@ -8,17 +8,32 @@
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="${appLabel}"
+        android:resizeableActivity="true"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".TabWindowActivity"
+            android:autoRemoveFromRecents="true"
+            android:documentLaunchMode="intoExisting"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.tabs"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".TabShortcutActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:taskAffinity="${applicationId}.shortcut"
+            android:theme="@android:style/Theme.NoDisplay" />
         <service
             android:name=".TerminalService"
             android:exported="false"

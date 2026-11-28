@@ -10,6 +10,7 @@ import android.system.Os
 import android.system.OsConstants
 import android.util.Log
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -40,6 +41,9 @@ internal class GraphicsTab(val id: Int, val windowId: String, name: String, wait
     var title by mutableStateOf(name)
     var pending by mutableStateOf(waiting)
     var error by mutableStateOf<String?>(null)
+    var desktopId by mutableStateOf<String?>(null)
+    var processId by mutableIntStateOf(0)
+    var rendering = ChromiumRendering.AUTOMATIC
     var launcher: Job? = null
     var timeout: Job? = null
 }
@@ -60,7 +64,8 @@ internal class GraphicsSessions(
     var installRevision by mutableStateOf(0)
         private set
     private val preparation = Mutex()
-    private val titles = mutableMapOf<String, String>()
+    private data class WindowMetadata(val title: String, val desktopId: String?, val processId: Int)
+    private val metadata = mutableMapOf<String, WindowMetadata>()
     private var prepared = false
     private var compositorStarted = false
     val acceleration get() = linux.acceleration
@@ -147,7 +152,7 @@ internal class GraphicsSessions(
                 val entry = apps.getJSONObject(index)
                 val path = entry.getString("path")
                 val desktopFile = when {
-                    path.startsWith("$home/") -> "/home/warp" + path.removePrefix(home)
+                    path.startsWith("$home/") -> DEBIAN_HOME + path.removePrefix(home)
                     path.startsWith("$root/") -> path.removePrefix(root)
                     else -> continue
                 }
@@ -417,10 +422,18 @@ internal class GraphicsSessions(
         probe?.takeIf { it.id == id }?.firstFrame = true
     }
 
-    fun launchApp(app: LinuxApp, chromiumCompatibility: Boolean, rendering: ChromiumRendering) {
+    fun launchApp(app: LinuxApp, chromiumCompatibility: Boolean, rendering: ChromiumRendering,
+        reusePending: Boolean): Int? {
         // One reservation per desktop id avoids ambiguous app_id matching for single-instance apps.
-        tabs.firstOrNull { it.pending && it.title == app.name }?.let { selected(it.id); return }
-        val tab = GraphicsTab(newId(), UUID.randomUUID().toString(), app.name, true)
+        tabs.firstOrNull { it.pending && it.desktopId == app.id }?.let {
+            if (!reusePending) return null
+            selected(it.id)
+            return it.id
+        }
+        val tab = GraphicsTab(newId(), UUID.randomUUID().toString(), app.name, true).apply {
+            desktopId = app.id
+            this.rendering = rendering
+        }
         tabs.add(tab)
         selected(tab.id)
         changed()
@@ -456,12 +469,17 @@ internal class GraphicsSessions(
                 failed(tab, "图形运行组件加载失败")
             }
         }
+        return tab.id
     }
 
     fun windowOpened(id: String) {
         if (probe?.id == id) return
         if (tabs.any { it.windowId == id }) return
-        val tab = GraphicsTab(newId(), id, titles.remove(id) ?: "Linux 窗口", false)
+        val info = metadata.remove(id)
+        val tab = GraphicsTab(newId(), id, info?.title ?: "Linux 窗口", false).apply {
+            desktopId = info?.desktopId
+            processId = info?.processId ?: 0
+        }
         tabs.add(tab)
         selected(tab.id)
         changed()
@@ -469,13 +487,13 @@ internal class GraphicsSessions(
 
     fun windowClosed(id: String) {
         if (probe?.id == id) return
-        titles.remove(id)
+        metadata.remove(id)
         tabs.firstOrNull { it.windowId == id && it.error == null }?.let { remove(it) }
     }
 
     fun selectWindow(id: String) { tabs.firstOrNull { it.windowId == id }?.let { selected(it.id) } }
 
-    fun titleChanged(id: String, title: String) {
+    fun metadataChanged(id: String, title: String, desktopId: String?, processId: Int) {
         probe?.takeIf { it.id == id }?.let {
             if ("Mobile Terminal WebGL OK " in title || "Mobile Terminal WebGL FAIL " in title ||
                 "Mobile Terminal WebGL WEBGL2 " in title) {
@@ -483,16 +501,20 @@ internal class GraphicsSessions(
             }
             return
         }
-        if (title.isBlank()) return
         val tab = tabs.firstOrNull { it.windowId == id }
-        if (tab == null) titles[id] = title else tab.title = title
+        if (tab == null) metadata[id] = WindowMetadata(title.ifBlank { "Linux 窗口" }, desktopId, processId)
+        else {
+            if (title.isNotBlank()) tab.title = title
+            if (tab.desktopId == null) tab.desktopId = desktopId
+            if (tab.processId == 0) tab.processId = processId
+        }
     }
 
     fun launchMatched(id: String) {
         tabs.firstOrNull { it.windowId == id && it.error == null }?.let {
             it.pending = false
             it.timeout?.cancel()
-            titles.remove(id)?.let { title -> it.title = title }
+            metadata.remove(id)?.let { (title, _) -> it.title = title }
         }
     }
 

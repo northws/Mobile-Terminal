@@ -38,8 +38,8 @@ pub fn event(writer: &mut impl Write, payload: Value) -> io::Result<()> {
     write(writer, JSON, &serde_json::to_vec(&payload)?)
 }
 
-pub fn hello(writer: &mut impl Write) -> io::Result<()> {
-    event(writer, json!({"type": "hello", "version": VERSION}))
+pub fn hello(writer: &mut impl Write, directory_fallback: bool) -> io::Result<()> {
+    event(writer, json!({"type": "hello", "version": VERSION, "directory_fallback": directory_fallback}))
 }
 
 #[cfg(test)]
@@ -57,7 +57,7 @@ mod tests {
         }
         let mut bytes = Vec::new();
         write(&mut bytes, TERMINAL, "你好".as_bytes()).unwrap();
-        hello(&mut bytes).unwrap();
+        hello(&mut bytes, false).unwrap();
         let mut reader = Fragmented(bytes.as_slice());
         assert_eq!(read(&mut reader).unwrap(), Some((TERMINAL, "你好".as_bytes().to_vec())));
         assert_eq!(read(&mut reader).unwrap().unwrap().0, JSON);

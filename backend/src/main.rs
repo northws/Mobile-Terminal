@@ -41,12 +41,14 @@ fn run() -> io::Result<()> {
     let session = SessionId::from((u64::from_ne_bytes(random) >> 12) + 1);
     let home = env::var_os("HOME").map(PathBuf::from)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is missing"))?;
+    let requested = env::var_os("WARP_START_DIRECTORY").map(PathBuf::from);
+    let directory = requested.as_ref().filter(|path| path.is_absolute() && env::set_current_dir(path).is_ok());
     let mut terminal = Terminal::new(session, INITIAL_ROWS);
     let mut parser = Processor::new();
     let mut input = pty::duplicate(libc::STDIN_FILENO)?;
     let mut output = io::BufWriter::new(io::stdout().lock());
-    protocol::hello(&mut output)?;
-    let mut pty = Pty::spawn(&home, session, 80, INITIAL_ROWS)?;
+    protocol::hello(&mut output, requested.is_some() && directory.is_none())?;
+    let mut pty = Pty::spawn(&home, directory.unwrap_or(&home), session, 80, INITIAL_ROWS)?;
     let status = relay(&mut input, &mut output, &mut pty, &mut parser, &mut terminal);
     if status.is_err() {
         pty.hangup();
