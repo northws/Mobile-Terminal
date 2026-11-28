@@ -4,7 +4,7 @@ Mobile Terminal 是一款 Android 原生终端。它在手机本地运行 Debian
 
 ## 使用
 
-从 [v0.2.13 正式版](https://github.com/northws/Mobile-Terminal/releases/tag/v0.2.13) 下载 APK 和 SHA-256 校验文件，适用于 ARM64 Android 10 或更新版本。已有正式版的用户可直接覆盖安装以保留 Debian 和主目录。首次打开后选择安装 Debian，应用会校验镜像、安装 `vim`、`less` 和 `sudo` 并检查终端。初始化需要网络及至少 600 MB 可用空间，完成后可离线打开 Bash。
+从 [v0.2.14 正式版](https://github.com/northws/Mobile-Terminal/releases/tag/v0.2.14) 下载 APK 和 SHA-256 校验文件，适用于 ARM64 Android 10 或更新版本。已有正式版的用户可直接覆盖安装以保留 Debian 和主目录。首次打开后选择安装 Debian，应用会校验镜像、安装 `vim`、`less` 和 `sudo` 并检查终端。初始化需要网络及至少 600 MB 可用空间，完成后可离线打开 Bash。
 
 - **更多 → 当前标签全屏**隐藏系统栏、标题栏和标签栏，不切换终端模式。点右上角「退出全屏」或使用系统返回可还原布局；已打开输入法时，返回先收起键盘。图形标签在全屏右下角保留「键盘」。
 - **更多 → 外观设置**可预览并切换默认薄荷、深色海蓝、浅色纸白，以及紧凑、标准、大字三档字号。设置立即应用并在重启后保留。「恢复默认」还原薄荷与标准字号。配色不覆盖终端 ANSI 颜色或 Linux 图形应用自己的主题。

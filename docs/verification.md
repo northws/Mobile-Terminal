@@ -1,5 +1,11 @@
 # Mobile Terminal 验证记录
 
+## v0.2.14 发布包
+
+2026-11-28，正式包名 `dev.warpterminal.mobile` 的 ARM64 调试 APK 已重新构建，`versionName=0.2.14`、`versionCode=16`、最低 Android 10。APK 的 SHA-256 为 `058080e6cce0c164a2906606d983ac3329eb8dcce3cd82445d5d16a6acb9850f`。APK v2 签名验证通过，签名证书与 GitHub 上的 v0.2.13 相同。
+
+本次构建通过全部 12 项 Android JVM 测试。包内 87 个资源及原生库文件与此前验证 Electron 和手势的构建逐项一致。下节记录了该功能版本并存测试包的 11 项荣耀平板仪器测试。发布时平板未连接，版本号递增后的 APK 未单独进行真机覆盖安装。
+
 ## Electron 通用兼容启动与图形触控手势
 
 2026-11-28，荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）并存测试包。平板安装的 ChatGPT 桌面入口使用 `Exec=chatgpt %U`，经 `/usr/bin/chatgpt` 符号链接进入包装脚本，再执行同目录的 ChatGPT。直接从 Debian 启动时报 `No usable sandbox!`。兼容模式保留该包装脚本，经用户确认后添加 Electron 启动参数，在 Wayland 下使用软件渲染。
