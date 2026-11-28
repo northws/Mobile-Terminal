@@ -18,6 +18,23 @@ internal class GraphicsView(context: Context, val windowId: String) : SurfaceVie
     private var inputType = EditorInfo.TYPE_CLASS_TEXT
     private var inputOptions = 0
     private var buttons = 0
+    private val gestures = GraphicsTouch(this,
+        touch = { action, id, x, y, time -> NativeBridge.nativeOnTouchEvent(windowId, action, id, x, y, time) },
+        point = ::point,
+        axis = { v, h, stop, time ->
+            NativeBridge.nativeOnPointerEvent(windowId, 2, 0f, 0f, 0, false, v, h, true, stop, time)
+        },
+        contextClick = { x, y, time ->
+            point(x, y, time)
+            for (pressed in listOf(true, false)) {
+                NativeBridge.nativeOnPointerEvent(windowId, 1, x, y, MotionEvent.BUTTON_SECONDARY,
+                    pressed, 0f, 0f, false, false, time)
+            }
+        })
+
+    private fun point(x: Float, y: Float, time: Long) {
+        NativeBridge.nativeOnPointerEvent(windowId, 0, x, y, 0, false, 0f, 0f, false, false, time)
+    }
 
     init {
         contentDescription = "Linux 图形窗口"
@@ -46,6 +63,7 @@ internal class GraphicsView(context: Context, val windowId: String) : SurfaceVie
     }
 
     private fun releaseSurface() {
+        gestures.cancel()
         if (ready && NativeBridge.isAttached(this)) {
             hideKeyboard()
             NativeBridge.nativeOnActivityFocusChanged(windowId, false)
@@ -60,6 +78,7 @@ internal class GraphicsView(context: Context, val windowId: String) : SurfaceVie
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus) gestures.cancel()
         updateFocus()
     }
 
@@ -115,6 +134,11 @@ internal class GraphicsView(context: Context, val windowId: String) : SurfaceVie
         if (event.isFromSource(InputDevice.SOURCE_MOUSE)) return pointer(event)
         val action = event.actionMasked
         if (action == MotionEvent.ACTION_DOWN) requestFocus()
+        if (gestures.active || (event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN) &&
+                event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER)) {
+            gestures.handle(event)
+            return true
+        }
         val indices = when (action) {
             MotionEvent.ACTION_MOVE, MotionEvent.ACTION_CANCEL -> 0 until event.pointerCount
             else -> event.actionIndex..event.actionIndex

@@ -6,7 +6,7 @@ import java.io.File
 import java.io.IOException
 import me.phie.tawc.compositor.NativeBridge
 
-/** Read only the selected application's icon, on the pin request's I/O dispatcher. */
+/** Resolves Debian application icons for the launcher and pinned shortcuts. Call on an I/O dispatcher. */
 internal class ShortcutIcon(rootfs: File, homeDir: File) {
     private val root = rootfs.canonicalFile
     private val home = homeDir.canonicalFile

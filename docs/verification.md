@@ -1,5 +1,32 @@
 # Mobile Terminal 验证记录
 
+## Electron 通用兼容启动与图形触控手势
+
+2026-11-28，荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，ARM64）并存测试包。平板安装的 ChatGPT 桌面入口使用 `Exec=chatgpt %U`，经 `/usr/bin/chatgpt` 符号链接进入包装脚本，再执行同目录的 ChatGPT。直接从 Debian 启动时报 `No usable sandbox!`。兼容模式保留该包装脚本，经用户确认后添加 Electron 启动参数，在 Wayland 下使用软件渲染。
+
+从「＋ 新标签 → 图形应用」确认启动 ChatGPT（Debian 包版本 `26.1120.50957`）后，图形标签显示 **Sign in to ChatGPT**。随后从相同入口打开 OpenCode（`2.4.2`），进入其会话页。再次选择同一应用会回到已有窗口。ChatGPT 验收截至登录页，未提交账号、消息或模型请求。
+
+主机的 Android JVM 用例覆盖 PATH 中的包装脚本、Debian 绝对及相对符号链接、OpenCode 的两个桌面入口、带空格的命令、环境变量、工作目录、共享 Electron 运行时和自定义启动脚本的显式标识。非 Electron 应用使用普通桌面启动，Chromium 使用自己的兼容及 GPU 选项。
+
+两项真机手势测试分别以 Wayland 和 XWayland 启动独立配置的 Chromium，打开本地测试页。测试向实际图形表面发送 Android 多指触摸事件，并读取 Linux 页面报告的滚动位置和事件计数。双指向左上方滑动后，页面的水平、垂直偏移均增加，点击和右键计数仍为零。双指轻点、单指轻点、单指长按分别产生右键、左键和右键事件，单指拖动产生了带按下状态的移动事件。这是设备自动化验收，真人手感尚待体验。
+
+12 项 Android JVM 测试和 11 项荣耀平板仪器测试通过。正式包名 ARM64 调试 APK 的 SHA-256 为 `76e488bbd20f736b67534089a99d1adc43a61c15c47aabea6f0fd5a0e64c2924`。平板安装的并存测试包为 `cb3411d3d55f4a1e3182864be20bc14c3ec4cd3e87d0400b3a5ea26c3d6e4124`。APK、校验文件、设备日志和登录页截图位于本地 `build/electron-touch/`。
+
+## OpenCode Desktop 与图形应用启动台
+
+2026-11-28，在荣耀 MagicPad3 Pro 13.3（YLP-W00，Android 17，PC 模式）的并存测试包中复现。直接启动 Debian 中的 Electron 版 OpenCode 时，进程以 `Debian`（UID 1000）运行，创建沙箱命名空间时报 `Operation not permitted`，随后 zygote 退出。单独关闭沙箱后，Electron 自带的 ANGLE 仍报告 `EGL_NOT_INITIALIZED`。经确认的兼容启动使用 Wayland 和软件渲染，沿用 OpenCode 自己的配置目录。
+
+| 真机场景 | 结果 |
+|---|---|
+| 打开图形应用 | 启动台显示 OpenCode、Chromium、Mousepad 等应用的图标与名称。OpenCode 软件包的两个等价桌面入口合并显示，xeyes 使用名称首字。缩窄 PC 模式窗口后，网格从 7 列重排为 3 列。 |
+| 启动和操作 OpenCode | 取消兼容启动后可重新选择。确认后进入 OpenCode 会话页，输入框显示草稿 `MobileTerminalDraft`，随后删除草稿。再次点启动台图标回到已有窗口。测试没有发送模型请求。 |
+| 其他入口 | 从网格成功打开和关闭 Mousepad。Chromium 显示原有的兼容启动选项。「渲染设置」可打开并返回应用，终端版 OpenCode 仍在「＋ 新标签」菜单。 |
+| 快捷方式冷启动 | 保存 OpenCode 的快捷方式配置，在系统桌面确认框取消固定。关闭原会话，用 ADB 发送桌面快捷方式相同的启动 Intent，确认兼容模式后在独立窗口重新看到 OpenCode 会话页。 |
+
+9 项 Android JVM 测试和 9 项真机仪器测试通过。JVM 新增用例覆盖两个桌面入口、主启动命令被改写、仅桌面操作中有匹配命令和缺少 Electron 运行文件的情况。本次以平板并存包验证实际操作。未测试模拟器或在线模型服务。
+
+正式包名 ARM64 调试 APK 的 SHA-256 为 `d9b68ad3a445abf899c3f4f62722d252ac3435de84b606cb0830ba661e3f8c86`，平板并存包为 `8c833bf78e521b2fbfd9ef34604ac2f38d343966e9b0eec3b8afc3761cf72c75`。APK、校验文件、启动台和草稿输入截图位于本地 `build/opencode-gui/`。
+
 ## PC 浮窗菜单定位
 
 在荣耀 MagicPad3 Pro 13.3（YLP-W00、Android 17）的 PC 模式中，从独立 Chromium 窗口点「窗口」。旧版按钮底部与首个菜单项顶部相距 306 个布局像素。修复后菜单面板从按钮下沿展开，首项保留 8 dp 的菜单内边距，菜单与按钮右边缘对齐。「＋ 新标签」和「更多」也在主窗口内按各自的按钮定位。

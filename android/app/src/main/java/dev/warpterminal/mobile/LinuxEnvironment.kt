@@ -45,6 +45,7 @@ internal class LinuxEnvironment(private val context: Context) {
     private val runner = File(runnerDir, "warp-android-backend")
     private val tawcroot = File(context.applicationInfo.nativeLibraryDir, "libtawcroot.so")
     internal val desktopRoot get() = rootfs
+    internal val electronDesktop = ElectronDesktop(rootfs, home)
     internal val graphicsShare = File(context.applicationInfo.dataDir, "share")
     internal val hybris = File(context.filesDir, "graphics-hybris")
     internal val acceleration = GraphicsAcceleration(context)
@@ -198,11 +199,18 @@ internal class LinuxEnvironment(private val context: Context) {
             acceleration.chromiumBackend(chromiumBinary, rendering)
         } else null
         val backend = when {
+            app.electron != null -> null
             chromiumCompatibility -> chromiumBackend?.display
             app.desktopFile == null -> acceleration.backend(GpuPath.X11)
             else -> acceleration.backend(GpuPath.WAYLAND)
         }
         val command = when {
+            app.electron != null -> {
+                if (app.desktopFile == null || electronDesktop.read(app.desktopFile, app.name) != app.electron) {
+                    throw IOException("应用的安装已变更，请重新打开图形应用列表。")
+                }
+                app.electron.arguments.toTypedArray()
+            }
             chromiumCompatibility -> {
                 check(app.isDebianChromium)
                 if (!File(rootfs, "usr/bin/chromium").canExecute()) throw IOException("Debian 中尚未安装 Chromium")
@@ -216,7 +224,8 @@ internal class LinuxEnvironment(private val context: Context) {
             }
             else -> arrayOf("/usr/bin/xeyes")
         }
-        return guest(rootfs, "/bin/bash", "-c", "cd \"\$HOME\" && exec \"\$@\"", "warp-launch",
+        return guest(rootfs, "/bin/bash", "-c", "cd -- \"\$1\" && shift && exec \"\$@\"", "warp-launch",
+            app.electron?.directory ?: DEBIAN_HOME,
             *command, asDebian = true, graphics = true, activation = token, backend = backend,
             chromiumBackend = chromiumBackend)
             .redirectOutput(File("/dev/null")).redirectError(File("/dev/null"))

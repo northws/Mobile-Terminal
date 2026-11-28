@@ -33,8 +33,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import me.phie.tawc.compositor.NativeBridge
 import org.json.JSONArray
 
-internal data class LinuxApp(val id: String, val name: String, val desktopFile: String?) {
+internal data class LinuxApp(val id: String, val name: String, val desktopFile: String?,
+    val electron: ElectronLaunch? = null) {
     val isDebianChromium get() = desktopFile == "/usr/share/applications/chromium.desktop"
+    val confirmLaunch get() = isDebianChromium || electron != null
 }
 
 internal class GraphicsTab(val id: Int, val windowId: String, name: String, waiting: Boolean) {
@@ -45,6 +47,7 @@ internal class GraphicsTab(val id: Int, val windowId: String, name: String, wait
     var iconPath by mutableStateOf<String?>(null)
     var processId by mutableIntStateOf(0)
     var rendering = ChromiumRendering.AUTOMATIC
+    var electron: ElectronLaunch? = null
     var launcher: Job? = null
     var timeout: Job? = null
 }
@@ -70,6 +73,7 @@ internal class GraphicsSessions(
     private var prepared = false
     private var compositorStarted = false
     val acceleration get() = linux.acceleration
+    val appIcons by lazy { ShortcutIcon(linux.desktopRoot, linux.home) }
     private var gpuCheck: Job? = null
     private var checkChromium = false
     private var probe: ProbeWindow? = null
@@ -157,7 +161,8 @@ internal class GraphicsSessions(
                     path.startsWith("$root/") -> path.removePrefix(root)
                     else -> continue
                 }
-                add(LinuxApp(entry.getString("id"), entry.getString("name"), desktopFile))
+                add(LinuxApp(entry.getString("id"), entry.getString("name"), desktopFile,
+                    linux.electronDesktop.read(desktopFile, entry.getString("name"))))
             }
             if (File(root, "usr/bin/xeyes").canExecute() && none { it.id.equals("xeyes", ignoreCase = true) }) {
                 add(LinuxApp("xeyes", "xeyes", null))
@@ -423,6 +428,10 @@ internal class GraphicsSessions(
         probe?.takeIf { it.id == id }?.firstFrame = true
     }
 
+    fun existingElectron(app: LinuxApp): Int? = if (app.electron != null) tabs.firstOrNull {
+        it.error == null && (it.desktopId == app.id || it.electron == app.electron)
+    }?.id else null
+
     fun launchApp(app: LinuxApp, chromiumCompatibility: Boolean, rendering: ChromiumRendering,
         reusePending: Boolean): Int? {
         // One reservation per desktop id avoids ambiguous app_id matching for single-instance apps.
@@ -433,6 +442,7 @@ internal class GraphicsSessions(
         }
         val tab = GraphicsTab(newId(), UUID.randomUUID().toString(), app.name, true).apply {
             desktopId = app.id
+            electron = app.electron
             this.rendering = rendering
         }
         tabs.add(tab)
@@ -440,13 +450,14 @@ internal class GraphicsSessions(
         changed()
         tab.launcher = scope.launch {
             try {
-                if (rendering != ChromiumRendering.SOFTWARE) {
+                if (app.electron == null && rendering != ChromiumRendering.SOFTWARE) {
                     detectGraphics(includeChromium = chromiumCompatibility)?.join()
                 }
                 prepare()
                 activate()
                 val token = withContext(Dispatchers.IO) {
-                    NativeBridge.nativeReserveLaunchHost(tab.windowId, app.id, -1)
+                    NativeBridge.nativeReserveLaunchHost(tab.windowId,
+                        app.electron?.windowClass ?: app.id, -1)
                 } ?: throw IOException("图形服务未响应")
                 tab.timeout = scope.launch {
                     delay(25_000)

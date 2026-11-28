@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -55,6 +56,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -171,7 +174,7 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
     var shortcutTab by rememberSaveable { mutableStateOf<Int?>(null) }
     var showApps by rememberSaveable { mutableStateOf(false) }
     var showCommand by rememberSaveable { mutableStateOf(false) }
-    var confirmChromium by remember { mutableStateOf<LinuxApp?>(null) }
+    var confirmApp by remember { mutableStateOf<LinuxApp?>(null) }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(service.selected) { keyboard?.hide() }
     fun activateTab(id: Int) {
@@ -293,59 +296,74 @@ private fun TerminalHome(service: TerminalService, bars: WindowInsetsControllerC
             open = { app ->
                 showApps = false
                 keyboard?.hide()
-                if (app.isDebianChromium) confirmChromium = app else openGraphics(TerminalService.ADD_GRAPHICS, app)
+                val existing = graphics.existingElectron(app)
+                when {
+                    existing != null -> activateTab(existing)
+                    app.confirmLaunch -> confirmApp = app
+                    else -> openGraphics(TerminalService.ADD_GRAPHICS, app)
+                }
             })
     }
-    confirmChromium?.let { app ->
-        ChromiumLaunchConfirmation(service.graphics.acceleration, cancel = { confirmChromium = null }) { rendering ->
-            confirmChromium = null
-            openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, rendering)
+    confirmApp?.let { app ->
+        GraphicsLaunchConfirmation(app, graphics.acceleration, cancel = { confirmApp = null }) { rendering ->
+            confirmApp = null
+            if (app.electron != null) {
+                start(Intent(TerminalService.KEEP_ALIVE))
+                service.launchGraphics(app, false, rendering)
+            } else openGraphics(TerminalService.ADD_COMPATIBLE_CHROMIUM, app, rendering)
         }
     }
 }
 
 @Composable
-internal fun ChromiumLaunchConfirmation(gpu: GraphicsAcceleration, preferred: ChromiumRendering = ChromiumRendering.AUTOMATIC,
+internal fun GraphicsLaunchConfirmation(app: LinuxApp, gpu: GraphicsAcceleration, preferred: ChromiumRendering = ChromiumRendering.AUTOMATIC,
     cancel: () -> Unit, launch: (ChromiumRendering) -> Unit) {
-        val result = gpu.result(GpuPath.CHROMIUM)?.takeIf { gpu.automatic }
-        val webGl2Only = result?.webGl2Only == true
-        AlertDialog(
-            onDismissRequest = cancel,
-            title = { Text("以兼容模式启动 Chromium？") },
-            text = {
-                Column {
-                    Text("此 Linux 环境无法启用 Chromium 的沙箱。兼容模式会关闭 Chromium 沙箱，使用独立的浏览器配置。请只打开可信页面。")
-                    if (webGl2Only) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("Adreno 已通过 WebGL 2 检测。WebGL 1 仍无法使用。")
-                        TextButton(onClick = {
-                            launch(ChromiumRendering.WEBGL2)
-                        }) { Text("WebGL 2 硬件启动") }
-                    }
-                    if (result?.xwaylandCompositor?.let(gpu::canProbeChromium) == true) {
-                        TextButton(onClick = {
-                            launch(ChromiumRendering.XWAYLAND_COMPOSITING)
-                        }) { Text("XWayland 硬件合成") }
-                    }
-                    if (result?.softwareCompositor?.let(gpu::canProbeChromium) == true) {
-                        TextButton(onClick = {
-                            launch(ChromiumRendering.SOFTWARE_COMPOSITING)
-                        }) { Text("软件合成（保留 WebGL 加速）") }
-                    }
+    if (app.electron != null) {
+        AlertDialog(onDismissRequest = cancel, title = { Text("以兼容模式启动 ${app.name}？") },
+            text = { Text("${app.name} 将以 Debian 普通用户运行，关闭 Electron 沙箱，使用软件渲染。请只打开可信内容。") },
+            confirmButton = { TextButton(onClick = { launch(ChromiumRendering.SOFTWARE) }) { Text("兼容启动") } },
+            dismissButton = { TextButton(onClick = cancel) { Text("取消") } })
+        return
+    }
+    val result = gpu.result(GpuPath.CHROMIUM)?.takeIf { gpu.automatic }
+    val webGl2Only = result?.webGl2Only == true
+    AlertDialog(
+        onDismissRequest = cancel,
+        title = { Text("以兼容模式启动 Chromium？") },
+        text = {
+            Column {
+                Text("此 Linux 环境无法启用 Chromium 的沙箱。兼容模式会关闭 Chromium 沙箱，使用独立的浏览器配置。请只打开可信页面。")
+                if (webGl2Only) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Adreno 已通过 WebGL 2 检测。WebGL 1 仍无法使用。")
+                    TextButton(onClick = {
+                        launch(ChromiumRendering.WEBGL2)
+                    }) { Text("WebGL 2 硬件启动") }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { launch(preferred) }) {
-                    Text(if (preferred == ChromiumRendering.AUTOMATIC) "兼容启动" else "按快捷方式设置启动")
+                if (result?.xwaylandCompositor?.let(gpu::canProbeChromium) == true) {
+                    TextButton(onClick = {
+                        launch(ChromiumRendering.XWAYLAND_COMPOSITING)
+                    }) { Text("XWayland 硬件合成") }
                 }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = cancel) { Text("取消") }
-                    TextButton(onClick = { launch(ChromiumRendering.SOFTWARE) }) { Text("软件启动") }
+                if (result?.softwareCompositor?.let(gpu::canProbeChromium) == true) {
+                    TextButton(onClick = {
+                        launch(ChromiumRendering.SOFTWARE_COMPOSITING)
+                    }) { Text("软件合成（保留 WebGL 加速）") }
                 }
-            },
-        )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { launch(preferred) }) {
+                Text(if (preferred == ChromiumRendering.AUTOMATIC) "兼容启动" else "按快捷方式设置启动")
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = cancel) { Text("取消") }
+                TextButton(onClick = { launch(ChromiumRendering.SOFTWARE) }) { Text("软件启动") }
+            }
+        },
+    )
 }
 
 @Composable
@@ -422,60 +440,62 @@ private fun GraphicsPicker(graphics: GraphicsSessions, close: () -> Unit, instal
             scanError = true
         }
     }
-    AlertDialog(
-        onDismissRequest = close,
-        title = { Text("图形应用") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                val gpu = graphics.acceleration
+    var settings by rememberSaveable { mutableStateOf(false) }
+    val gpu = graphics.acceleration
+    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.padding(12.dp).widthIn(max = 720.dp).fillMaxWidth().heightIn(max = 560.dp),
+            shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("图形渲染", Modifier.weight(1f))
-                    TextButton(onClick = { graphics.setAutomaticGraphics(true) }, enabled = !gpu.automatic) {
-                        Text("自动")
-                    }
-                    TextButton(onClick = { graphics.setAutomaticGraphics(false) }, enabled = gpu.automatic) {
-                        Text("软件")
-                    }
+                    Text("图形应用", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    TextButton(onClick = { settings = !settings }) { Text(if (settings) "返回应用" else "渲染设置") }
                 }
-                if (gpu.automatic && gpu.potentialAdreno) {
-                    for (path in GpuPath.entries) {
-                        val result = gpu.result(path)
-                        if (result != null || gpu.running == path) {
-                            val mode = when {
-                                gpu.running == path -> "正在检测"
-                                result?.hardware == true -> result.detail
-                                else -> "软件渲染（${result?.detail.orEmpty()}）"
-                            }
-                            Text("${path.label} · $mode", style = MaterialTheme.typography.bodySmall)
+                if (settings) Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("图形渲染", Modifier.weight(1f))
+                        TextButton(onClick = { graphics.setAutomaticGraphics(true) }, enabled = !gpu.automatic) {
+                            Text("自动")
+                        }
+                        TextButton(onClick = { graphics.setAutomaticGraphics(false) }, enabled = gpu.automatic) {
+                            Text("软件")
                         }
                     }
-                    TextButton(onClick = { graphics.detectGraphics(includeChromium = true, retry = true) },
-                        enabled = gpu.running == null) { Text("重新检测") }
-                } else {
-                    Text("新启动的程序使用软件渲染", style = MaterialTheme.typography.bodySmall)
-                }
-                when {
+                    if (gpu.automatic && gpu.potentialAdreno) {
+                        for (path in GpuPath.entries) {
+                            val result = gpu.result(path)
+                            if (result != null || gpu.running == path) {
+                                val mode = when {
+                                    gpu.running == path -> "正在检测"
+                                    result?.hardware == true -> result.detail
+                                    else -> "软件渲染（${result?.detail.orEmpty()}）"
+                                }
+                                Text("${path.label} · $mode", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        TextButton(onClick = { graphics.detectGraphics(includeChromium = true, retry = true) },
+                            enabled = gpu.running == null) { Text("重新检测") }
+                    } else {
+                        Text("新启动的程序使用软件渲染", style = MaterialTheme.typography.bodySmall)
+                    }
+                } else when {
                     scanError -> Text("无法读取已安装的图形应用")
                     apps == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
                     apps?.isEmpty() == true -> Text("Debian 中还没有图形应用。")
-                    else -> LazyColumn(Modifier.weight(1f, fill = false).heightIn(max = 300.dp)) {
-                        items(apps.orEmpty(), key = LinuxApp::id) { app ->
-                            TextButton(onClick = { open(app) }, modifier = Modifier.fillMaxWidth()) { Text(app.name) }
-                        }
-                    }
+                    else -> LinuxAppGrid(apps.orEmpty(), graphics.appIcons,
+                        Modifier.fillMaxWidth().weight(1f, fill = false), open)
                 }
                 graphics.installStatus?.let {
                     Text(it)
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
                 graphics.installError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = install, enabled = graphics.installStatus == null) { Text("安装示例应用") }
+                    TextButton(onClick = close) { Text("完成") }
+                }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = install, enabled = graphics.installStatus == null) { Text("安装示例应用") }
-        },
-        dismissButton = { TextButton(onClick = close) { Text("完成") } },
-    )
+        }
+    }
 }
 
 @Composable

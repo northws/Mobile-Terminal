@@ -2,8 +2,6 @@ package dev.warpterminal.mobile
 
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -96,15 +94,12 @@ internal fun TabShortcutDialog(service: TerminalService, id: Int, close: () -> U
                         TextButton(onClick = { showApps = !showApps }, enabled = !apps.isNullOrEmpty()) {
                             Text(picked?.name ?: "选择已安装的图形应用")
                         }
-                        if (showApps) LazyColumn(Modifier.heightIn(max = 160.dp)) {
-                            items(apps.orEmpty(), key = LinuxApp::id) { app ->
-                                TextButton(onClick = {
-                                    selectedApp = app.id
-                                    command = ""
-                                    showApps = false
-                                }, modifier = Modifier.fillMaxWidth()) { Text(app.name) }
-                            }
-                        }
+                        if (showApps) LinuxAppGrid(apps.orEmpty(), service.graphics.appIcons,
+                            Modifier.fillMaxWidth().heightIn(max = 220.dp), open = { app ->
+                                selectedApp = app.id
+                                command = ""
+                                showApps = false
+                            })
                     }
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }

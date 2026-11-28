@@ -101,8 +101,18 @@ class TabWindowActivity : SessionActivity() {
                         failure = "无法加载图形运行组件。"
                         return@LaunchedEffect
                     }
-                    if (app == null) failure = "快捷方式对应的图形应用已卸载或不可用。"
-                    else if (app.isDebianChromium) confirm = app to saved.rendering
+                    if (app == null) {
+                        failure = "快捷方式对应的图形应用已卸载或不可用。"
+                        return@LaunchedEffect
+                    }
+                    val existing = service.graphics.existingElectron(app)
+                    if (existing != null) {
+                        val window = service.windowFor(existing)
+                        if (window == null) launch { existing } else {
+                            WindowLinks.open(this@TabWindowActivity, window)
+                            finishAndRemoveTask()
+                        }
+                    } else if (app.confirmLaunch) confirm = app to saved.rendering
                     else launch { service.launchGraphics(app, false, saved.rendering, reusePending = false) }
                 }
                 null -> failure = "找不到此桌面快捷方式。"
@@ -170,9 +180,9 @@ class TabWindowActivity : SessionActivity() {
         }
         shortcutTab?.let { TabShortcutDialog(service, it) { shortcutTab = null } }
         confirm?.let { (app, rendering) ->
-            ChromiumLaunchConfirmation(service.graphics.acceleration, rendering, cancel = { finishAndRemoveTask() }) { mode ->
+            GraphicsLaunchConfirmation(app, service.graphics.acceleration, rendering, cancel = { finishAndRemoveTask() }) { mode ->
                 confirm = null
-                launch { service.launchGraphics(app, true, mode, reusePending = false) }
+                launch { service.launchGraphics(app, app.isDebianChromium, mode, reusePending = false) }
             }
         }
     }
